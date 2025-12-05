@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Modern Web Vocoder</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-text">
+      <p class="eyebrow">Web Vocoder</p>
+      <h1>Record your voice and play it back in creative ways</h1>
+      <p class="lede">
+        Click once to capture a sample, then explore modern Web Audio effects right in your browser—no downloads required.
+      </p>
+      <div class="cta-row">
+        <button id="recordButton" class="button primary">Request microphone &amp; start</button>
+        <button id="stopButton" class="button" disabled>Stop recording</button>
+      </div>
+      <p id="status" class="status">Ready when you are.</p>
+    </div>
+    <div class="header-visual" aria-hidden="true">
+      <div class="pulse"></div>
+      <div class="wave"></div>
+    </div>
+  </header>
+
+  <main class="app-main">
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <p class="eyebrow">Playback lab</p>
+          <h2>Choose an effect and listen</h2>
+        </div>
+        <div class="chip" id="durationChip" aria-live="polite">No recording yet</div>
+      </div>
+      <div id="effectsGrid" class="effects-grid" aria-live="polite">
+        <!-- Cards inserted via JavaScript -->
+      </div>
+    </section>
+
+    <section class="panel secondary">
+      <h3>Tips</h3>
+      <ul>
+        <li>Use headphones to avoid feedback while experimenting.</li>
+        <li>Record again at any time; the new take replaces the previous one.</li>
+        <li>If you deny microphone access accidentally, re-enable it in your browser settings.</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <p>Built with the modern Web Audio API. Your audio stays in the browser.</p>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
