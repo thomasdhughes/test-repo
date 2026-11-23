@@ -66,6 +66,19 @@ select,.btn{background:var(--panel2);border:1px solid var(--line);border-radius:
 .btn[disabled]{opacity:.4;cursor:default}
 .grow{flex:1}
 
+details.panel summary{cursor:pointer;font:700 16px var(--display);list-style:none;display:flex;justify-content:space-between;align-items:center}
+details.panel summary::-webkit-details-marker{display:none}
+details.panel summary::after{content:"Open";font:600 12px var(--body);color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:4px 12px}
+details.panel[open] summary::after{content:"Close"}
+details.panel summary small{font:400 13px var(--body);color:var(--dim);margin-left:10px}
+.more{display:flex;flex-direction:column;gap:18px;margin-top:16px}
+.more .pad{background:var(--panel2)}
+.more .pad[aria-pressed="true"]{background:var(--accent)}
+.controls.two{grid-template-columns:repeat(2,1fr)}
+@media(max-width:560px){.controls.two{grid-template-columns:1fr}}
+.sw{display:flex;gap:10px;align-items:flex-start}
+.sw input{margin-top:4px;accent-color:var(--accent)}
+.sw b{display:block}.sw span{color:var(--dim);font-size:13px}
 /* looper */
 .looper{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
 .loopbtn{position:relative;width:104px;height:104px;border-radius:50%;border:none;background:var(--panel2);flex:none;display:grid;place-items:center}
@@ -178,6 +191,29 @@ a.dl{color:var(--accent)}
     </div>
   </section>
 
+  <details class="panel" id="more">
+    <summary><span>More<small>choirs, thicken, echo, polish</small></span></summary>
+    <div class="more">
+      <div class="label">Choirs</div>
+      <div class="pads" id="pads2" aria-label="Choir sounds"></div>
+      <div class="controls two">
+        <div class="ctl">
+          <div class="row"><label class="label" for="thick">Thicken</label><output id="thickOut"></output></div>
+          <input type="range" id="thick" min="0" max="100" value="0">
+          <span class="hint" style="margin:0">Adds two more of you, left and right. Works on any sound.</span>
+        </div>
+        <div class="ctl">
+          <div class="row"><label class="label" for="echo">Echo</label><output id="echoOut"></output></div>
+          <input type="range" id="echo" min="0" max="100" value="0">
+          <span class="hint" style="margin:0">Repeats that trail off after each phrase.</span>
+        </div>
+      </div>
+      <label class="sw"><input type="checkbox" id="polish"><div><b>Studio polish</b><span>Evens out loud and quiet parts and adds clarity, like a finished record.</span></div></label>
+      <label class="sw"><input type="checkbox" id="gate"><div><b>Hide room noise</b><span>Fades out hiss and background sound between phrases.</span></div></label>
+      <label class="sw"><input type="checkbox" id="autokey"><div><b>Find my note automatically</b><span>Sing as you please. Record first: it sets the note the moment you stop recording. Live: it keeps listening and adjusts.</span></div></label>
+    </div>
+  </details>
+
   <section class="panel" id="tapePanel" hidden>
     <div class="looper">
       <button class="loopbtn" id="tape" aria-label="Record or play">
@@ -238,7 +274,7 @@ class Vox extends AudioWorkletProcessor {
     this.lastMidi = 0; this.rawMidi = 0; this.slope = 0; this.jump = 0; this.hold = 0;
     // tuning
     this.key = 0; this.scale = [1,0,1,0,1,1,0,1,0,1,0,1]; this.chrom = false;
-    this.tune = 1; this.sc = 0; this.note = -1; this.dry = 0; this.shift = 0; this.fsh = 1;
+    this.tune = 1; this.sc = 0; this.note = -1; this.dry = 0; this.shift = 0; this.fsh = 1; this.gate = false; this.env = 0; this.gg = 1;
     this.voices = [];
     // input filter
     this.hpX = 0; this.hpY = 0; this.hpA = Math.exp(-2 * Math.PI * 70 / sr);
@@ -271,12 +307,18 @@ class Vox extends AudioWorkletProcessor {
       this.key = m.key; this.scale = m.scale; this.chrom = m.scale.every(x => x);
       this.tune = m.tune; this.dry = m.shift ? 0 : m.dry;
       this.shift = m.shift || 0; this.fsh = Math.pow(2, this.shift * 0.35 / 12); // voice character follows the pitch a little
-      if (m.voices) this.voices = m.voices.map(v => {
-        const a = (v.pan + 1) * Math.PI / 4;
-        return { mode: v.mode, val: v.val, cents: v.cents || 0, formant: v.formant || 1, lead: !!v.lead,
-                 gl: Math.cos(a) * v.gain * 1.414, gr: Math.sin(a) * v.gain * 1.414, ratio: 1, next: 0, c: NaN };
-      });
-      this.note = -1;
+      this.gate = !!m.gate;
+      if (m.voices) {
+        const keep = m.voices.length === this.voices.length; // same shape: update in place, no click
+        this.voices = m.voices.map((v, i) => {
+          const a = (v.pan + 1) * Math.PI / 4, old = keep ? this.voices[i] : null;
+          return { mode: v.mode, val: v.val, cents: v.cents || 0, formant: v.formant || 1, lead: !!v.lead,
+                   dl: (v.delay || 0) * sampleRate / 1000,
+                   gl: Math.cos(a) * v.gain * 1.414, gr: Math.sin(a) * v.gain * 1.414,
+                   ratio: old ? old.ratio : 1, next: old ? old.next : 0, c: old ? old.c : NaN };
+        });
+        if (!keep) this.note = -1;
+      }
     } else if (m.type === 'loop') this.loopPress();
     else if (m.type === 'undo') this.undo();
     else if (m.type === 'clear') { this.layers = []; this.state = 'empty'; this.recTarget = 0; this.recGain = 0; this.loopLen = 0; }
@@ -378,7 +420,7 @@ class Vox extends AudioWorkletProcessor {
     if (!voiced && !v.lead) { v.next += P; return; }
     const ratio = voiced ? v.ratio : f;
     v.next += P / ratio;
-    const ideal = this.w - P - 3;
+    const ideal = this.w - P - 3 - v.dl;
     let c = v.c;
     if (!(c > ideal - 6 * P && c < ideal + 2 * P)) c = ideal; else c += Math.floor((ideal - c) / P) * P;
     v.c = c;
@@ -405,8 +447,14 @@ class Vox extends AudioWorkletProcessor {
         else if (this.ts === 'play') { raw = this.tape[this.tp++]; if (this.tp >= this.tapeLen) { this.tp = 0; if (this.once) this.ts = 'idle'; } }
         else raw = 0;
       }
-      const x = raw - this.hpX + this.hpA * this.hpY; this.hpX = raw; this.hpY = x; // high-pass
+      let x = raw - this.hpX + this.hpA * this.hpY; this.hpX = raw; this.hpY = x; // high-pass
       const ax = x < 0 ? -x : x; if (ax > this.peak) this.peak = ax;
+      if (this.gate) { // fade out the room between phrases
+        this.env = ax > this.env ? ax : this.env * 0.99985;
+        const tg = this.env > 0.01 ? 1 : this.env < 0.005 ? 0.06 : this.gg;
+        this.gg += (tg - this.gg) * (tg > this.gg ? 0.004 : 0.0003);
+        x *= this.gg;
+      }
       this.inBuf[this.w & this.mask] = x; this.w++;
       this.dacc += x;
       if (++this.dcnt === this.D) { this.dBuf[this.dw & this.dmask] = this.dacc / this.D; this.dw++; this.dacc = 0; this.dcnt = 0; }
@@ -453,8 +501,12 @@ class Tap extends AudioWorkletProcessor {
     const a = inputs[0], o = outputs[0]; if (!a || !a[0]) return true;
     const L = a[0], R = a[1] || a[0];
     for (let i = 0; i < L.length; i++) {
-      o[0][i] = L[i]; if (o[1]) o[1][i] = R[i];
-      if (this.on) { this.buf[this.n++] = L[i]; this.buf[this.n++] = R[i]; if (this.n >= 8192) this.flush(); }
+      // safety limiter: untouched below 0.7, rounded off above, never clips
+      let l = L[i], r = R[i]; const al = l < 0 ? -l : l, ar = r < 0 ? -r : r;
+      if (al > 0.7) l = (l < 0 ? -1 : 1) * (0.7 + 0.29 * Math.tanh((al - 0.7) / 0.29));
+      if (ar > 0.7) r = (r < 0 ? -1 : 1) * (0.7 + 0.29 * Math.tanh((ar - 0.7) / 0.29));
+      o[0][i] = l; if (o[1]) o[1][i] = r;
+      if (this.on) { this.buf[this.n++] = l; this.buf[this.n++] = r; if (this.n >= 8192) this.flush(); }
     }
     return true;
   }
@@ -479,7 +531,31 @@ const PRESETS = [
   { id:'oct',    name:'Octaves',   desc:'You, plus a low and a high double',       tune:100, verb:32, voices:[lead(), {mode:'semi',val:-12,pan:-.3,gain:.7,formant:.95}, {mode:'semi',val:12,pan:.3,gain:.3}] },
 ];
 
-let ctx, vox, tap, wet, master, stream, src, preset = PRESETS[2];
+// Choir variations. Each voice sits a few milliseconds behind the last, like real singers.
+const d = (val, pan, gain, delay, o = {}) => ({ mode:'deg', val, pan, gain, delay, ...o });
+const CHOIRS = [
+  { id:'cathedral', name:'Cathedral', desc:'The choir in a giant stone hall', tune:100, verb:85,
+    voices:[lead({gain:.8}), d(0,-.9,.4,18,{cents:-10}), d(0,.9,.4,27,{cents:10}), d(2,-.6,.5,12), d(4,.6,.5,22), d(-7,0,.6,30), d(-3,-.3,.4,16), d(7,.3,.2,35)] },
+  { id:'monks', name:'Monks', desc:'Low, dark voices underneath you', tune:100, verb:60,
+    voices:[lead({gain:.7}), d(-7,0,.8,20,{formant:.92}), d(-3,-.6,.6,14,{formant:.94}), d(-5,.6,.55,26,{formant:.94}), d(-14,0,.35,32,{formant:.9})] },
+  { id:'angels', name:'Angels', desc:'High, airy voices floating above', tune:100, verb:65,
+    voices:[lead({gain:.7}), d(2,-.7,.5,12,{formant:1.05}), d(4,.7,.5,20,{formant:1.05}), d(7,0,.45,28,{formant:1.08}), d(9,-.4,.3,34,{formant:1.1}), d(11,.4,.22,40,{formant:1.1})] },
+  { id:'crowd', name:'Crowd', desc:'Lots of you on the same note. No harmonies, so it never clashes', tune:60, verb:35,
+    voices:[lead({gain:.8}), d(0,-1,.5,11,{cents:-14}), d(0,1,.5,19,{cents:13}), d(0,-.5,.45,29,{cents:7,formant:1.04}), d(0,.5,.45,37,{cents:-8,formant:.96}), d(0,-.2,.4,46,{cents:19,formant:.93}), d(0,.2,.4,24,{cents:-20,formant:1.07})] },
+  { id:'fifths', name:'Open Fifths', desc:'Hollow and huge, like a chant', tune:100, verb:50,
+    voices:[lead(), d(4,-.6,.55,14), d(-3,.6,.55,22), d(-7,0,.6,30), d(7,0,.25,18)] },
+  { id:'lush', name:'Lush', desc:'Rich, jazzy stacked chords', tune:100, verb:50,
+    voices:[lead({gain:.85}), d(2,-.7,.5,12), d(4,.7,.45,20), d(6,-.4,.4,28), d(8,.4,.3,34), d(-7,0,.55,24)] },
+  { id:'stadium', name:'Stadium', desc:'Octaves and harmonies, everything at once', tune:100, verb:55,
+    voices:[lead({gain:.9}), d(-7,-.3,.6,22), d(7,.3,.3,16), d(2,-.8,.45,12), d(4,.8,.45,26), d(-3,0,.45,32), d(-5,-.5,.35,38), d(9,.5,.2,30), d(0,-1,.35,15,{cents:-9}), d(0,1,.35,21,{cents:9})] },
+  { id:'soft', name:'Soft Choir', desc:'Gentle tuning with a quiet choir behind you', tune:45, verb:45,
+    voices:[lead(), d(2,-.7,.3,20), d(4,.7,.28,30), d(-7,0,.35,36), d(0,-.9,.3,14,{cents:-8}), d(0,.9,.3,24,{cents:8})] },
+  { id:'giants', name:'Giants', desc:'The choir, but everyone is enormous', tune:100, verb:55,
+    voices:[lead({formant:.86,gain:.9}), d(2,-.6,.55,14,{formant:.86}), d(4,.6,.5,24,{formant:.86}), d(-7,0,.7,30,{formant:.84}), d(-3,-.3,.45,36,{formant:.85})] },
+  { id:'kids', name:'Kids Choir', desc:'Small, bright voices', tune:100, verb:45,
+    voices:[lead({formant:1.18,gain:.9}), d(2,-.7,.55,13,{formant:1.2}), d(4,.7,.5,22,{formant:1.2}), d(7,0,.4,30,{formant:1.22}), d(0,-.4,.4,18,{cents:12,formant:1.16})] },
+];
+let ctx, vox, tap, wet, master, stream, src, preset = PRESETS[2], echoSend, polishIn, polishOut;
 let keyFind = null, taking = false, takeChunks = [];
 let mode = 'live', tapeState = 'idle', tapeLen = 0, rendering = 0;
 
@@ -491,6 +567,13 @@ PRESETS.forEach((p, i) => {
   b.onclick = () => choose(p);
   $('pads').appendChild(b);
 });
+CHOIRS.forEach(p => {
+  const b = document.createElement('button');
+  b.className = 'pad'; b.dataset.id = p.id; b.setAttribute('aria-pressed', false);
+  b.innerHTML = `<span class="top"><b>${p.name}</b></span><em>${p.desc}</em>`;
+  b.onclick = () => choose(p);
+  $('pads2').appendChild(b);
+});
 NOTES.forEach((n, i) => $('key').add(new Option(n, i)));
 let refMidi = 48; // the starting note, C3..B3 by default
 try { const s = JSON.parse(localStorage.vb || '{}'); if (s.ref) refMidi = s.ref; if (s.scale) $('scale').value = s.scale; } catch {}
@@ -500,13 +583,20 @@ function send(withVoices) {
   $('tuneOut').textContent = +$('tune').value === 0 ? 'off' : +$('tune').value === 100 ? 'hard' : $('tune').value;
   const ps = +$('pitch').value; $('pitchOut').textContent = ps === 0 ? 'normal' : Math.abs(ps) === 12 ? (ps > 0 ? 'one octave higher' : 'one octave lower') : Math.abs(ps) + (ps > 0 ? ' higher' : ' lower');
   $('verbOut').textContent = $('verb').value; $('volOut').textContent = $('vol').value;
+  $('thickOut').textContent = +$('thick').value ? $('thick').value : 'off'; $('echoOut').textContent = +$('echo').value ? $('echo').value : 'off';
   try { localStorage.vb = JSON.stringify({ ref: refMidi, scale: $('scale').value }); } catch {}
   if (!vox) return;
   const t = ctx.currentTime;
   wet.gain.setTargetAtTime(Math.pow($('verb').value / 100, 1.5) * 0.9, t, 0.05);
   master.gain.setTargetAtTime(Math.pow($('vol').value / 100, 2) * 1.4, t, 0.03);
-  vox.port.postMessage({ type:'params', key:+$('key').value, scale:SCALES[$('scale').value],
-    tune: $('tune').value / 100, shift: +$('pitch').value, dry: preset.dry || 0, voices: withVoices ? preset.voices : null });
+  echoSend.gain.setTargetAtTime(Math.pow($('echo').value / 100, 1.3) * 0.6, t, 0.05);
+  // voices: the sound's own, a plain voice if a dry sound is pitch-shifted, plus the Thicken doubles
+  const th = $('thick').value / 100, shift = +$('pitch').value;
+  let voices = preset.voices;
+  if (!voices.length && shift) voices = [lead()];
+  if (th > 0) voices = [...voices, d(0, -1, th * 0.7, 16, { cents: -11 }), d(0, 1, th * 0.7, 25, { cents: 11 })];
+  vox.port.postMessage({ type:'params', key:+$('key').value, scale:SCALES[$('scale').value], gate: $('gate').checked,
+    tune: $('tune').value / 100, shift, dry: preset.dry || 0, voices });
 }
 function choose(p) {
   preset = p; $('tune').value = p.tune; $('verb').value = p.verb;
@@ -514,7 +604,9 @@ function choose(p) {
   send(true);
 }
 $('pitch0').onclick = () => { $('pitch').value = 0; send(false); };
-['pitch','tune','verb','vol'].forEach(id => $(id).oninput = () => send(false));
+$('gate').onchange = () => send(false);
+$('polish').onchange = () => wirePolish();
+['pitch','tune','verb','vol','thick','echo'].forEach(id => $(id).oninput = () => send(false));
 // ---- starting note: a reference tone to sing from; it also sets the key everything is tuned to ----
 let drone = null, ringing = [];
 const hz = m => 440 * Math.pow(2, (m - 69) / 12);
@@ -575,6 +667,11 @@ async function openMic(deviceId) {
   const cur = stream.getAudioTracks()[0].getSettings().deviceId, sel = $('mic');
   sel.innerHTML = ''; devs.forEach(d => sel.add(new Option(d.label || 'Microphone', d.deviceId, false, d.deviceId === cur)));
 }
+function wirePolish() {
+  if (!master) return;
+  master.disconnect(); polishOut.disconnect();
+  if ($('polish').checked) { master.connect(polishIn); polishOut.connect(tap); } else master.connect(tap);
+}
 async function start() {
   ctx = new AudioContext({ latencyHint: 0 });
   const url = 'data:text/javascript;base64,' + btoa(unescape(encodeURIComponent($('worklet').textContent)));
@@ -584,7 +681,18 @@ async function start() {
   const verb = ctx.createConvolver(); verb.buffer = makeIR(2.6);
   wet = ctx.createGain(); master = ctx.createGain(); wet.gain.value = 0; master.gain.value = 0;
   vox.connect(master); vox.connect(verb); verb.connect(wet); wet.connect(master);
-  master.connect(tap); tap.connect(ctx.destination);
+  // echo: a filtered repeat that feeds back into itself
+  echoSend = ctx.createGain(); echoSend.gain.value = 0;
+  const dly = ctx.createDelay(1), elp = ctx.createBiquadFilter(), efb = ctx.createGain();
+  dly.delayTime.value = 0.33; elp.frequency.value = 2600; efb.gain.value = 0.4;
+  vox.connect(echoSend).connect(dly).connect(elp).connect(master); elp.connect(efb).connect(dly); elp.connect(verb);
+  // studio polish: cut rumble and mud, add air, even out the level
+  const f = (type, freq, gain, q) => { const b = ctx.createBiquadFilter(); b.type = type; b.frequency.value = freq; if (gain) b.gain.value = gain; if (q) b.Q.value = q; return b; };
+  polishIn = f('highpass', 90); const mud = f('peaking', 280, -3, 1), air = f('highshelf', 7500, 5), comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -24; comp.knee.value = 12; comp.ratio.value = 4; comp.attack.value = 0.005; comp.release.value = 0.15;
+  polishOut = ctx.createGain(); polishOut.gain.value = 1.3;
+  polishIn.connect(mud).connect(air).connect(comp).connect(polishOut);
+  tap.connect(ctx.destination); wirePolish();
   vox.port.onmessage = e => onStatus(e.data);
   vox.port.postMessage({ type: 'mode', mode });
   tap.port.onmessage = e => takeChunks.push(e.data);
@@ -631,6 +739,7 @@ function onStatus(s) {
     nd.classList.toggle('good', Math.abs(off) < 0.15);
     if (keyFind) keyFind.h[((Math.round(s.midi) % 12) + 12) % 12]++;
   }
+  autoKey(s);
   loopState = s.state;
   const lb = $('loop'); lb.classList.toggle('rec', s.state === 'rec' || s.state === 'dub');
   $('loopLabel').innerHTML = { empty:'Record<br>layer', rec:'Tap to<br>loop it', play:'Add<br>layer', dub:'Tap when<br>done' }[s.state];
@@ -657,6 +766,37 @@ $('undo').onclick = () => vox.port.postMessage({ type: 'undo' });
 $('clear').onclick = () => vox.port.postMessage({ type: 'clear' });
 
 // ---- find my key: listen for 10 s, match the notes sung against major/minor profiles ----
+const PROF = { major:[6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88], minor:[6.33,2.68,3.52,5.38,2.6,3.53,2.54,4.75,3.98,2.69,3.34,3.17] };
+function keyFit(h, k, sc) { // how well the notes sung match a key
+  const p = PROF[sc]; if (!p) return -2;
+  let mh = 0, mp = 0; for (let i = 0; i < 12; i++) { mh += h[i] / 12; mp += p[i] / 12; }
+  let a = 0, b = 0, c = 0; for (let i = 0; i < 12; i++) { const x = h[(i + k) % 12] - mh, y = p[i] - mp; a += x * y; b += x * x; c += y * y; }
+  return a / Math.sqrt(b * c || 1);
+}
+function bestKey(h) {
+  let best = -2, bk = 0, bs = 'major';
+  for (let k = 0; k < 12; k++) for (const sc of ['major', 'minor']) { const v = keyFit(h, k, sc); if (v > best) { best = v; bk = k; bs = sc; } }
+  return { bk, bs, best };
+}
+// automatic version: while recording (Record first) or all the time (Live)
+let autoH = Array(12).fill(0), autoN = 0, lastTs = 'idle';
+function autoKey(s) {
+  if (!$('autokey').checked || keyFind) { lastTs = s.ts; return; }
+  const apply = (r, why) => { $('scale').value = r.bs; setRef(48 + r.bk, false);
+    $('keyhint').textContent = `${why}: ${NOTES[r.bk]}, ${r.bs === 'major' ? 'bright' : 'dark'}.`; };
+  const total = () => autoH.reduce((a, b) => a + b, 0), pc = ((Math.round(s.midi) % 12) + 12) % 12;
+  if (mode === 'tape') {
+    if (s.ts === 'rec') { if (lastTs !== 'rec') autoH.fill(0); if (s.midi > 0) autoH[pc]++; }
+    else if (lastTs === 'rec' && total() > 40) apply(bestKey(autoH), 'Found your note from the recording');
+  } else {
+    for (let i = 0; i < 12; i++) autoH[i] *= 0.9992; // forget slowly, about 20 seconds
+    if (s.midi > 0) autoH[pc]++;
+    if (++autoN >= 90) { autoN = 0;
+      if (total() > 80) { const r = bestKey(autoH), now = keyFit(autoH, +$('key').value, $('scale').value);
+        if ((r.bk !== +$('key').value || r.bs !== $('scale').value) && r.best > now + 0.08) apply(r, 'Following your singing'); } }
+  }
+  lastTs = s.ts;
+}
 $('findkey').onclick = () => {
   if (keyFind || !vox) return;
   if (mode === 'tape' && tapeLen && tapeState === 'idle') tapeCmd('play'); // listen to the recording
@@ -665,11 +805,7 @@ $('findkey').onclick = () => {
     if (left > 0) { $('keyhint').textContent = `Sing your melody… ${left--}`; setTimeout(tick, 1000); return; }
     const h = keyFind.h; keyFind = null;
     if (h.reduce((a, b) => a + b, 0) < 40) { $('keyhint').textContent = "Didn't hear enough singing. Try again."; return; }
-    const maj = [6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88], min = [6.33,2.68,3.52,5.38,2.6,3.53,2.54,4.75,3.98,2.69,3.34,3.17];
-    const corr = (p, k) => { let mh = 0, mp = 0; for (let i = 0; i < 12; i++) { mh += h[i] / 12; mp += p[i] / 12; }
-      let a = 0, b = 0, c = 0; for (let i = 0; i < 12; i++) { const x = h[(i + k) % 12] - mh, y = p[i] - mp; a += x * y; b += x * x; c += y * y; } return a / Math.sqrt(b * c || 1); };
-    let best = -2, bk = 0, bs = 'major';
-    for (let k = 0; k < 12; k++) { const a = corr(maj, k), b = corr(min, k); if (a > best) { best = a; bk = k; bs = 'major'; } if (b > best) { best = b; bk = k; bs = 'minor'; } }
+    const { bk, bs } = bestKey(h);
     $('scale').value = bs; setRef(48 + bk, false);
     $('keyhint').textContent = `Found it: ${NOTES[bk]}, ${bs === 'major' ? 'bright' : 'dark'}. Everything is tuned to that now.`;
   };
