@@ -608,6 +608,7 @@ $('clear').onclick = () => vox.port.postMessage({ type: 'clear' });
 // ---- find my key: listen for 10 s, match the notes sung against major/minor profiles ----
 $('findkey').onclick = () => {
   if (keyFind) return;
+  if (mode === 'tape' && tapeLen && tapeState === 'idle') tapeCmd('play'); // listen to the recording
   keyFind = { h: Array(12).fill(0) }; let left = 10;
   const tick = () => {
     if (left > 0) { $('keyhint').textContent = `Sing your melody… ${left--}`; setTimeout(tick, 1000); return; }
