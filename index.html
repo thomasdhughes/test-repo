@@ -83,12 +83,21 @@ select,.btn{background:var(--panel2);border:1px solid var(--line);border-radius:
 .btn.recording{background:var(--rec);border-color:var(--rec);color:#2a0008}
 a.dl{color:var(--accent)}
 
+.seg{display:flex;background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:3px}
+.seg button{background:none;border:none;border-radius:999px;padding:7px 14px;color:var(--dim);font-weight:600}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+.head{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+#mic{max-width:220px}
+.gos{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+.go2{background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:999px;padding:16px 28px;font:700 18px var(--display)}
+#start small{color:var(--dim);display:block;font:400 12px var(--body);margin-top:3px}
 /* start overlay */
 #start{position:fixed;inset:0;background:var(--bg);display:grid;place-items:center;padding:24px;z-index:5}
 #start div{max-width:440px;text-align:center;display:flex;flex-direction:column;gap:18px;align-items:center}
 #start h2{font:700 40px/1.05 var(--display);margin:0}
 #start p{color:var(--dim);margin:0}
-#go{background:var(--accent);color:var(--accent-ink);border:none;border-radius:999px;padding:16px 34px;font:700 18px var(--display)}
+#go{background:var(--accent);color:var(--accent-ink);border:none;border-radius:999px;padding:16px 28px;font:700 18px var(--display)}
+#go small{color:var(--accent-ink);opacity:.75}
 #err{color:var(--rec)}
 [hidden]{display:none!important}
 </style>
@@ -98,8 +107,11 @@ a.dl{color:var(--accent)}
 <div id="start">
   <div>
     <h2>Vocal <span style="color:var(--accent)">Booth</span></h2>
-    <p>Put on wired headphones first. Speakers will feed back, and Bluetooth headphones add a delay that makes singing hard.</p>
-    <button id="go">Start singing</button>
+    <p>Live needs wired headphones: speakers feed back, and Bluetooth adds a delay. With anything else, record first and add the effects on playback.</p>
+    <div class="gos">
+      <button id="go">Live<small>wired headphones</small></button>
+      <button id="goTape" class="go2">Record first<small>any headphones or speakers</small></button>
+    </div>
     <p id="err" hidden></p>
   </div>
 </div>
@@ -107,7 +119,10 @@ a.dl{color:var(--accent)}
 <main>
   <header>
     <h1>Vocal <span>Booth</span></h1>
-    <select id="mic" aria-label="Microphone"></select>
+    <div class="head">
+      <div class="seg" id="mode"><button data-m="live" aria-pressed="true">Live</button><button data-m="tape" aria-pressed="false">Record first</button></div>
+      <select id="mic" aria-label="Microphone"></select>
+    </div>
   </header>
 
   <section class="panel">
@@ -151,7 +166,24 @@ a.dl{color:var(--accent)}
     </div>
   </section>
 
-  <section class="panel">
+  <section class="panel" id="tapePanel" hidden>
+    <div class="looper">
+      <button class="loopbtn" id="tape" aria-label="Record or play">
+        <svg viewBox="0 0 104 104"><circle class="track" cx="52" cy="52" r="46"/><circle class="prog" id="tprog" cx="52" cy="52" r="46"/></svg>
+        <span id="tapeLabel">Record</span>
+      </button>
+      <div class="loopinfo">
+        <div class="hint" id="tapeHint" style="margin:0">Press Space and sing. You won't hear yourself while recording.</div>
+        <div class="btnrow">
+          <button class="btn" id="rerec" disabled>Record again</button>
+          <button class="btn" id="render" disabled>Save with effects</button>
+          <span id="dl2"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="loopPanel">
     <div class="looper">
       <button class="loopbtn" id="loop" aria-label="Loop">
         <svg viewBox="0 0 104 104"><circle class="track" cx="52" cy="52" r="46"/><circle class="prog" id="prog" cx="52" cy="52" r="46"/></svg>
@@ -203,9 +235,26 @@ class Vox extends AudioWorkletProcessor {
     this.maxLen = Math.floor(sr * 60); this.state = 'empty';
     this.layers = []; this.loopLen = 0; this.pos = 0;
     this.recGain = 0; this.recTarget = 0; this.recStep = 1 / (0.012 * sr);
+    // record-first mode: a dry tape that replaces the mic as the engine's input
+    this.mode = 'live'; this.ts = 'idle'; this.tape = null; this.tapeLen = 0; this.tp = 0; this.once = false;
     this.port.onmessage = e => this.msg(e.data);
   }
+  tapeStop() {
+    if (this.ts === 'rec') {
+      const n = this.tapeLen, f = Math.min(Math.floor(0.01 * sampleRate), n >> 1);
+      if (n < sampleRate * 0.3) this.tapeLen = 0;
+      else for (let i = 0; i < f; i++) { this.tape[i] *= i / f; this.tape[n - 1 - i] *= i / f; }
+    }
+    this.ts = 'idle';
+  }
   msg(m) {
+    if (m.type === 'mode') { this.tapeStop(); this.mode = m.mode; this.msg({ type: 'clear' }); return; }
+    if (m.type === 'tape') {
+      if (m.cmd === 'rec') { if (!this.tape) this.tape = new Float32Array(Math.floor(sampleRate * 120)); this.tapeLen = 0; this.ts = 'rec'; }
+      else if (m.cmd === 'stop') this.tapeStop();
+      else if (this.tapeLen) { this.tapeStop(); this.tp = 0; this.once = m.cmd === 'once'; this.ts = 'play'; }
+      return;
+    }
     if (m.type === 'params') {
       this.key = m.key; this.scale = m.scale; this.chrom = m.scale.every(x => x);
       this.tune = m.tune; this.dry = m.dry;
@@ -336,7 +385,13 @@ class Vox extends AudioWorkletProcessor {
     const inp = inputs[0] && inputs[0][0], out = outputs[0], oL = out[0], oR = out[1] || out[0], n = oL.length;
     const vs = this.voices, nv = vs.length;
     for (let i = 0; i < n; i++) {
-      const raw = inp ? inp[i] : 0;
+      let raw = inp ? inp[i] : 0;
+      const recording = this.ts === 'rec';
+      if (this.mode === 'tape') {
+        if (recording) { this.tape[this.tapeLen++] = raw; if (this.tapeLen >= this.tape.length) this.tapeStop(); }
+        else if (this.ts === 'play') { raw = this.tape[this.tp++]; if (this.tp >= this.tapeLen) { this.tp = 0; if (this.once) this.ts = 'idle'; } }
+        else raw = 0;
+      }
       const x = raw - this.hpX + this.hpA * this.hpY; this.hpX = raw; this.hpY = x; // high-pass
       const ax = x < 0 ? -x : x; if (ax > this.peak) this.peak = ax;
       this.inBuf[this.w & this.mask] = x; this.w++;
@@ -360,13 +415,14 @@ class Vox extends AudioWorkletProcessor {
         if (this.recGain > 0 && ly.length) { const t = ly[ly.length - 1]; t[0][p] += l * this.recGain; t[1][p] += r * this.recGain; }
         if (++this.pos >= this.loopLen) this.pos = 0;
       }
-      oL[i] = Math.tanh(l + ll); oR[i] = Math.tanh(r + lr);
+      if (recording) { oL[i] = 0; oR[i] = 0; } else { oL[i] = Math.tanh(l + ll); oR[i] = Math.tanh(r + lr); }
     }
     this.o += n;
     this.rep += n;
     if (this.rep >= 1024) {
       this.rep = 0;
       this.port.postMessage({ midi: this.voiced ? this.lastMidi : -1, note: this.note, peak: this.peak, state: this.state,
+        ts: this.ts, tlen: this.tapeLen / sampleRate, tprog: this.ts === 'rec' ? this.tapeLen / (sampleRate * 120) : (this.tapeLen ? this.tp / this.tapeLen : 0),
         layers: this.layers.length, prog: this.state === 'rec' ? this.pos / this.maxLen : (this.loopLen ? this.pos / this.loopLen : 0) });
       this.peak = 0;
     }
@@ -412,6 +468,7 @@ const PRESETS = [
 
 let ctx, vox, tap, wet, master, stream, src, preset = PRESETS[2];
 let keyFind = null, taking = false, takeChunks = [];
+let mode = 'live', tapeState = 'idle', tapeLen = 0, rendering = 0;
 
 // ---- UI build ----
 PRESETS.forEach((p, i) => {
@@ -478,20 +535,36 @@ async function start() {
   vox.connect(master); vox.connect(verb); verb.connect(wet); wet.connect(master);
   master.connect(tap); tap.connect(ctx.destination);
   vox.port.onmessage = e => onStatus(e.data);
+  vox.port.postMessage({ type: 'mode', mode });
   tap.port.onmessage = e => takeChunks.push(e.data);
   await openMic();
   await ctx.resume();
   choose(preset);
 }
-$('go').onclick = async () => {
-  $('go').disabled = true; $('err').hidden = true;
-  try { await start(); $('start').hidden = true; }
+function setMode(m) {
+  mode = m;
+  document.querySelectorAll('#mode button').forEach(b => b.setAttribute('aria-pressed', b.dataset.m === m));
+  $('loopPanel').hidden = m !== 'live'; $('tapePanel').hidden = m !== 'tape';
+  $('hint').textContent = m === 'live' ? 'Pick a sound and sing.' : 'Record yourself, then switch sounds while it plays back.';
+  if (vox) vox.port.postMessage({ type: 'mode', mode: m });
+}
+document.querySelectorAll('#mode button').forEach(b => b.onclick = () => setMode(b.dataset.m));
+const tapeCmd = cmd => vox && vox.port.postMessage({ type: 'tape', cmd });
+$('tape').onclick = () => { if (rendering) return; tapeCmd(tapeState !== 'idle' ? 'stop' : tapeLen ? 'play' : 'rec'); };
+$('rerec').onclick = () => tapeCmd('rec');
+$('render').onclick = () => { rendering = 1; takeChunks = []; tap.port.postMessage(true); tapeCmd('once'); $('render').textContent = 'Saving…'; };
+
+async function begin(m) {
+  $('go').disabled = $('goTape').disabled = true; $('err').hidden = true;
+  try { mode = m; await start(); setMode(m); $('start').hidden = true; }
   catch (e) {
-    $('go').disabled = false; $('err').hidden = false;
+    $('go').disabled = $('goTape').disabled = false; $('err').hidden = false;
     $('err').textContent = e.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it in the address bar, then press Start again.'
       : 'Could not start audio: ' + e.message;
   }
-};
+}
+$('go').onclick = () => begin('live');
+$('goTape').onclick = () => begin('tape');
 $('mic').onchange = () => openMic($('mic').value).catch(() => {});
 
 // ---- status from the engine ----
@@ -513,6 +586,20 @@ function onStatus(s) {
   $('prog').style.strokeDashoffset = 289 * (1 - s.prog);
   const dots = $('dots'); if (dots.childElementCount !== s.layers) dots.innerHTML = '<i></i>'.repeat(s.layers);
   $('undo').disabled = s.state === 'empty'; $('clear').disabled = s.state === 'empty';
+  // record-first panel
+  tapeState = s.ts; tapeLen = s.tlen;
+  $('tape').classList.toggle('rec', s.ts === 'rec');
+  $('tapeLabel').textContent = s.ts !== 'idle' ? 'Stop' : s.tlen ? 'Play' : 'Record';
+  $('tprog').style.strokeDashoffset = 289 * (1 - s.tprog);
+  $('rerec').disabled = !s.tlen || s.ts === 'rec' || !!rendering; $('render').disabled = !s.tlen || s.ts === 'rec' || !!rendering;
+  $('tapeHint').textContent = s.ts === 'rec' ? `Recording… ${s.tlen.toFixed(0)}s. Press Space to stop.`
+    : s.tlen ? `${s.tlen.toFixed(1)}s recorded. It loops while playing, so try each sound, the key and the sliders.`
+    : "Press Space and sing. You won't hear yourself while recording.";
+  if (rendering === 1 && s.ts === 'play') rendering = 2;
+  else if (rendering === 2 && s.ts === 'idle') { // one pass done: wait for the reverb tail, then save
+    rendering = 3;
+    setTimeout(() => { tap.port.postMessage(false); setTimeout(() => { saveWav($('dl2'), 'vocal-booth-' + preset.id + '.wav'); rendering = 0; $('render').textContent = 'Save with effects'; }, 150); }, 2500);
+  }
 }
 $('loop').onclick = () => vox && vox.port.postMessage({ type: 'loop' });
 $('undo').onclick = () => vox.port.postMessage({ type: 'undo' });
@@ -544,7 +631,9 @@ $('take').onclick = () => {
   $('take').textContent = taking ? 'Stop and save' : 'Save a take';
   if (taking) { takeChunks = []; tap.port.postMessage(true); return; }
   tap.port.postMessage(false);
-  setTimeout(() => {
+  setTimeout(() => saveWav($('dl'), 'vocal-booth-take.wav'), 150);
+};
+function saveWav(slot, name) {
     const n = takeChunks.reduce((a, c) => a + c.length, 0), dv = new DataView(new ArrayBuffer(44 + n * 2)), sr = ctx.sampleRate;
     const str = (o, s) => [...s].forEach((ch, i) => dv.setUint8(o + i, ch.charCodeAt(0)));
     str(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); str(8, 'WAVEfmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true);
@@ -552,16 +641,15 @@ $('take').onclick = () => {
     str(36, 'data'); dv.setUint32(40, n * 2, true);
     let o = 44; for (const c of takeChunks) for (let i = 0; i < c.length; i++, o += 2) dv.setInt16(o, Math.max(-1, Math.min(1, c[i])) * 32767, true);
     const a = document.createElement('a'); a.className = 'dl'; a.href = URL.createObjectURL(new Blob([dv], { type: 'audio/wav' }));
-    a.download = 'vocal-booth-take.wav'; a.textContent = 'Download take'; $('dl').replaceChildren(a); a.click();
-  }, 150);
-};
+    a.download = name; a.textContent = 'Download'; slot.replaceChildren(a); a.click();
+}
 
 // ---- keys ----
 addEventListener('keydown', e => {
   if (!vox || e.metaKey || e.ctrlKey || e.target.tagName === 'SELECT') return;
-  if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) $('loop').click(); }
+  if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) $(mode === 'live' ? 'loop' : 'tape').click(); }
   else if (e.key >= '1' && e.key <= '8') choose(PRESETS[e.key - 1]);
-  else if (e.key === 'u' || e.key === 'Backspace') $('undo').click();
+  else if ((e.key === 'u' || e.key === 'Backspace') && mode === 'live') $('undo').click();
 });
 send(false);
 </script>
