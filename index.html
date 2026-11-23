@@ -79,6 +79,20 @@ details.panel summary small{font:400 13px var(--body);color:var(--dim);margin-le
 .sw{display:flex;gap:10px;align-items:flex-start}
 .sw input{margin-top:4px;accent-color:var(--accent)}
 .sw b{display:block}.sw span{color:var(--dim);font-size:13px}
+.tracks{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+.tracks:empty{display:none}
+.trk{display:flex;gap:8px;align-items:center;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:6px 8px}
+.trk.sel{border-color:var(--accent)}
+.trk.recg{border-color:var(--rec)}
+.trk .tname{flex:1;min-width:0;background:none;border:none;text-align:left;padding:4px 6px;display:flex;gap:10px;align-items:baseline}
+.trk .tname span{color:var(--dim);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trk.sel .tname b{color:var(--accent)}
+.trk input[type=range]{width:90px;flex:none}
+.btn.sm{padding:4px 10px;font-size:12px;background:var(--panel)}
+.btn.sm.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:700}
+@media(max-width:560px){.trk{flex-wrap:wrap}.trk .tname{flex-basis:100%}}
+details.fix{margin-top:14px}
+details.fix summary{cursor:pointer;color:var(--dim);font-size:13px}
 /* looper */
 .looper{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
 .loopbtn{position:relative;width:104px;height:104px;border-radius:50%;border:none;background:var(--panel2);flex:none;display:grid;place-items:center}
@@ -214,21 +228,39 @@ a.dl{color:var(--accent)}
     </div>
   </details>
 
+  <section class="panel">
+    <div class="keyrow">
+      <label style="display:flex;gap:8px;align-items:center;font-weight:600"><input type="checkbox" id="metro"> Metronome</label>
+      <input type="range" id="bpm" min="50" max="200" value="90" class="grow" aria-label="Tempo">
+      <output id="bpmOut" style="font:12px var(--mono);color:var(--dim);min-width:8ch;text-align:right"></output>
+    </div>
+    <div class="hint" id="metroHint">With it on, you get four clicks before recording and the loop is trimmed to fit the beat.</div>
+  </section>
+
   <section class="panel" id="tapePanel" hidden>
     <div class="looper">
-      <button class="loopbtn" id="tape" aria-label="Record or play">
+      <button class="loopbtn" id="tape" aria-label="Record, play or stop">
         <svg viewBox="0 0 104 104"><circle class="track" cx="52" cy="52" r="46"/><circle class="prog" id="tprog" cx="52" cy="52" r="46"/></svg>
         <span id="tapeLabel">Record</span>
       </button>
       <div class="loopinfo">
         <div class="hint" id="tapeHint" style="margin:0">Press Space and sing. You won't hear yourself while recording.</div>
         <div class="btnrow">
-          <button class="btn" id="rerec" disabled>Record again</button>
-          <button class="btn" id="render" disabled>Save with effects</button>
+          <button class="btn" id="addlayer" disabled>+ Record another layer</button>
+          <button class="btn" id="render" disabled>Save the mix</button>
           <span id="dl2"></span>
         </div>
       </div>
     </div>
+    <div class="tracks" id="tracks"></div>
+    <details class="fix">
+      <summary>Layers sound out of time with each other?</summary>
+      <div class="ctl" style="margin-top:10px">
+        <div class="row"><label class="label" for="sync">Timing fix</label><output id="syncOut"></output></div>
+        <input type="range" id="sync" min="0" max="500" value="0">
+        <span class="hint" style="margin:0">Headphones, Bluetooth especially, play sound late, so a new layer lands late. Drag this while the loop plays until the layers line up. It only needs setting once.</span>
+      </div>
+    </details>
   </section>
 
   <section class="panel" id="loopPanel">
@@ -283,24 +315,26 @@ class Vox extends AudioWorkletProcessor {
     this.maxLen = Math.floor(sr * 60); this.state = 'empty';
     this.layers = []; this.loopLen = 0; this.pos = 0;
     this.recGain = 0; this.recTarget = 0; this.recStep = 1 / (0.012 * sr);
-    // record-first mode: a dry tape that replaces the mic as the engine's input
-    this.mode = 'live'; this.ts = 'idle'; this.tape = null; this.tapeLen = 0; this.tp = 0; this.once = false;
+    // layer mode: a dry tape replaces the mic, looping against the shared clock (currentFrame)
+    this.mode = 'live'; this.rec = false; this.playing = false; this.armed = false; this.capt = false;
+    this.tape = null; this.tapeLen = 0; this.t0 = 0; this.tLoop = 0; this.off = 0;
     this.port.onmessage = e => this.msg(e.data);
   }
-  tapeStop() {
-    if (this.ts === 'rec') {
-      const n = this.tapeLen, f = Math.min(Math.floor(0.01 * sampleRate), n >> 1);
-      if (n < sampleRate * 0.3) this.tapeLen = 0;
-      else for (let i = 0; i < f; i++) { this.tape[i] *= i / f; this.tape[n - 1 - i] *= i / f; }
-    }
-    this.ts = 'idle';
+  report() {
+    this.port.postMessage({ midi: this.voiced ? this.lastMidi : -1, note: this.note, peak: this.peak, state: this.state,
+      ts: this.capt ? 'rec' : this.playing ? 'play' : 'idle', tlen: this.tapeLen, armed: this.armed,
+      layers: this.layers.length, prog: this.state === 'rec' ? this.pos / this.maxLen : (this.loopLen ? this.pos / this.loopLen : 0) });
+    this.peak = 0;
   }
   msg(m) {
-    if (m.type === 'mode') { this.tapeStop(); this.mode = m.mode; this.msg({ type: 'clear' }); return; }
+    if (m.type === 'mode') { this.rec = false; this.playing = false; this.capt = false; this.mode = m.mode; this.msg({ type: 'clear' }); return; }
     if (m.type === 'tape') {
-      if (m.cmd === 'rec') { if (!this.tape) this.tape = new Float32Array(Math.floor(sampleRate * 120)); this.tapeLen = 0; this.ts = 'rec'; }
-      else if (m.cmd === 'stop') this.tapeStop();
-      else if (this.tapeLen) { this.tapeStop(); this.tp = 0; this.once = m.cmd === 'once'; this.ts = 'play'; }
+      if (m.cmd === 'rec') { this.tape = new Float32Array(m.max); this.tapeLen = 0; this.t0 = m.t0; this.tLoop = m.loopLen; this.off = m.off;
+        this.rec = true; this.capt = true; this.armed = true; this.playing = m.loopLen > 0; }
+      else if (m.cmd === 'recstop') { this.rec = false; this.capt = false; this.report(); }
+      else if (m.cmd === 'play') { this.t0 = m.t0; this.tLoop = m.loopLen; this.off = m.off; this.playing = true; }
+      else if (m.cmd === 'off') this.off = m.off;
+      else if (m.cmd === 'stop') { this.rec = false; this.capt = false; this.playing = false; }
       return;
     }
     if (m.type === 'params') {
@@ -440,12 +474,19 @@ class Vox extends AudioWorkletProcessor {
     const inp = inputs[0] && inputs[0][0], out = outputs[0], oL = out[0], oR = out[1] || out[0], n = oL.length;
     const vs = this.voices, nv = vs.length;
     for (let i = 0; i < n; i++) {
-      let raw = inp ? inp[i] : 0;
-      const recording = this.ts === 'rec';
+      let raw = inp ? inp[i] : 0, recording = false; // recording = listen to the mic but stay silent
       if (this.mode === 'tape') {
-        if (recording) { this.tape[this.tapeLen++] = raw; if (this.tapeLen >= this.tape.length) this.tapeStop(); }
-        else if (this.ts === 'play') { raw = this.tape[this.tp++]; if (this.tp >= this.tapeLen) { this.tp = 0; if (this.once) this.ts = 'idle'; } }
-        else raw = 0;
+        const fr = currentFrame + i - this.t0; let sv = 0;
+        if (this.rec) {
+          if (fr >= this.tape.length) { this.rec = false; this.capt = false; }
+          else { if (fr >= 0) { this.tape[fr] = raw; this.tapeLen = fr + 1; }
+            if (!this.tLoop || fr < this.tLoop) { sv = raw; recording = true; } else this.capt = false; } // past the loop end: keep the tail, start playing
+        } else if (!this.playing) { sv = raw; recording = true; } // idle: still show the mic's level and pitch
+        if (!recording && this.playing && fr >= 0 && this.tLoop) {
+          const pos = fr % this.tLoop, ti = pos + this.off, e = Math.min(pos, this.tLoop - 1 - pos);
+          if (ti < this.tapeLen) sv = this.tape[ti] * (e < 480 ? e / 480 : 1); // short fade at the loop seam
+        }
+        raw = sv;
       }
       let x = raw - this.hpX + this.hpA * this.hpY; this.hpX = raw; this.hpY = x; // high-pass
       const ax = x < 0 ? -x : x; if (ax > this.peak) this.peak = ax;
@@ -482,10 +523,7 @@ class Vox extends AudioWorkletProcessor {
     this.rep += n;
     if (this.rep >= 1024) {
       this.rep = 0;
-      this.port.postMessage({ midi: this.voiced ? this.lastMidi : -1, note: this.note, peak: this.peak, state: this.state,
-        ts: this.ts, tlen: this.tapeLen / sampleRate, tprog: this.ts === 'rec' ? this.tapeLen / (sampleRate * 120) : (this.tapeLen ? this.tp / this.tapeLen : 0),
-        layers: this.layers.length, prog: this.state === 'rec' ? this.pos / this.maxLen : (this.loopLen ? this.pos / this.loopLen : 0) });
-      this.peak = 0;
+      this.report();
     }
     return true;
   }
@@ -555,58 +593,70 @@ const CHOIRS = [
   { id:'kids', name:'Kids Choir', desc:'Small, bright voices', tune:100, verb:45,
     voices:[lead({formant:1.18,gain:.9}), d(2,-.7,.55,13,{formant:1.2}), d(4,.7,.5,22,{formant:1.2}), d(7,0,.4,30,{formant:1.22}), d(0,-.4,.4,18,{cents:12,formant:1.16})] },
 ];
-let ctx, vox, tap, wet, master, stream, src, preset = PRESETS[2], echoSend, polishIn, polishOut;
+let ctx, vox, tap, master, stream, src, verbNode, echoIn, polishIn, polishOut;
 let keyFind = null, taking = false, takeChunks = [];
-let mode = 'live', tapeState = 'idle', tapeLen = 0, rendering = 0;
+let mode = 'live';
+// Every channel (the live voice, and each recorded layer) has its own sound settings and its own engine.
+const newSet = (o = {}) => ({ preset: PRESETS[2], pitch: 0, tune: 100, verb: 22, thick: 0, echo: 0, vol: 100, mute: false, solo: false, ...o });
+const liveS = newSet();
+let tracks = [], sel = null, recT = null, stopping = false, playing = false, loopLen = 0, t0 = 0, grid = false, rendering = false, trackN = 0;
+const cur = () => (mode === 'tape' && sel) ? sel : liveS; // the settings the pads and sliders are editing
 
 // ---- UI build ----
-PRESETS.forEach((p, i) => {
+const pad = (p, i, into) => {
   const b = document.createElement('button');
-  b.className = 'pad'; b.dataset.id = p.id; b.setAttribute('aria-pressed', p === preset);
-  b.innerHTML = `<span class="top"><b>${p.name}</b><kbd>${i + 1}</kbd></span><em>${p.desc}</em>`;
+  b.className = 'pad'; b.dataset.id = p.id; b.setAttribute('aria-pressed', p === liveS.preset);
+  b.innerHTML = `<span class="top"><b>${p.name}</b>${i == null ? '' : `<kbd>${i + 1}</kbd>`}</span><em>${p.desc}</em>`;
   b.onclick = () => choose(p);
-  $('pads').appendChild(b);
-});
-CHOIRS.forEach(p => {
-  const b = document.createElement('button');
-  b.className = 'pad'; b.dataset.id = p.id; b.setAttribute('aria-pressed', false);
-  b.innerHTML = `<span class="top"><b>${p.name}</b></span><em>${p.desc}</em>`;
-  b.onclick = () => choose(p);
-  $('pads2').appendChild(b);
-});
+  $(into).appendChild(b);
+};
+PRESETS.forEach((p, i) => pad(p, i, 'pads'));
+CHOIRS.forEach(p => pad(p, null, 'pads2'));
 NOTES.forEach((n, i) => $('key').add(new Option(n, i)));
 let refMidi = 48; // the starting note, C3..B3 by default
 try { const s = JSON.parse(localStorage.vb || '{}'); if (s.ref) refMidi = s.ref; if (s.scale) $('scale').value = s.scale; } catch {}
 $('key').value = refMidi % 12;
 
-function send(withVoices) {
+function send() {
   $('tuneOut').textContent = +$('tune').value === 0 ? 'off' : +$('tune').value === 100 ? 'hard' : $('tune').value;
   const ps = +$('pitch').value; $('pitchOut').textContent = ps === 0 ? 'normal' : Math.abs(ps) === 12 ? (ps > 0 ? 'one octave higher' : 'one octave lower') : Math.abs(ps) + (ps > 0 ? ' higher' : ' lower');
   $('verbOut').textContent = $('verb').value; $('volOut').textContent = $('vol').value;
   $('thickOut').textContent = +$('thick').value ? $('thick').value : 'off'; $('echoOut').textContent = +$('echo').value ? $('echo').value : 'off';
+  $('bpmOut').textContent = $('bpm').value + ' BPM'; $('syncOut').textContent = $('sync').value + ' ms';
   try { localStorage.vb = JSON.stringify({ ref: refMidi, scale: $('scale').value }); } catch {}
-  if (!vox) return;
-  const t = ctx.currentTime;
-  wet.gain.setTargetAtTime(Math.pow($('verb').value / 100, 1.5) * 0.9, t, 0.05);
-  master.gain.setTargetAtTime(Math.pow($('vol').value / 100, 2) * 1.4, t, 0.03);
-  echoSend.gain.setTargetAtTime(Math.pow($('echo').value / 100, 1.3) * 0.6, t, 0.05);
+  const S = cur(); S.pitch = +$('pitch').value; S.tune = +$('tune').value; S.verb = +$('verb').value; S.thick = +$('thick').value; S.echo = +$('echo').value;
+  if (!ctx) return;
+  master.gain.setTargetAtTime(Math.pow($('vol').value / 100, 2) * 1.4, ctx.currentTime, 0.03);
+  [liveS, ...tracks].forEach(apply);
+}
+function apply(S) { // push one channel's settings to its engine
+  const c = S.ch; if (!c) return;
+  const t = ctx.currentTime, anySolo = tracks.some(x => x.solo), heard = S === liveS || (anySolo ? S.solo : !S.mute);
+  c.out.gain.setTargetAtTime(heard ? Math.pow(S.vol / 100, 2) : 0, t, 0.03);
+  c.vs.gain.setTargetAtTime(Math.pow(S.verb / 100, 1.5) * 0.9, t, 0.05);
+  c.es.gain.setTargetAtTime(Math.pow(S.echo / 100, 1.3) * 0.6, t, 0.05);
   // voices: the sound's own, a plain voice if a dry sound is pitch-shifted, plus the Thicken doubles
-  const th = $('thick').value / 100, shift = +$('pitch').value;
-  let voices = preset.voices;
-  if (!voices.length && shift) voices = [lead()];
+  const th = S.thick / 100;
+  let voices = S.preset.voices;
+  if (!voices.length && S.pitch) voices = [lead()];
   if (th > 0) voices = [...voices, d(0, -1, th * 0.7, 16, { cents: -11 }), d(0, 1, th * 0.7, 25, { cents: 11 })];
-  vox.port.postMessage({ type:'params', key:+$('key').value, scale:SCALES[$('scale').value], gate: $('gate').checked,
-    tune: $('tune').value / 100, shift, dry: preset.dry || 0, voices });
+  c.node.port.postMessage({ type:'params', key:+$('key').value, scale:SCALES[$('scale').value], gate: $('gate').checked,
+    tune: S.tune / 100, shift: S.pitch, dry: S.preset.dry || 0, voices });
+}
+function loadUI(S) { // show a channel's settings on the pads and sliders
+  $('pitch').value = S.pitch; $('tune').value = S.tune; $('verb').value = S.verb; $('thick').value = S.thick; $('echo').value = S.echo;
+  document.querySelectorAll('.pad').forEach(b => b.setAttribute('aria-pressed', b.dataset.id === S.preset.id));
+  send();
 }
 function choose(p) {
-  preset = p; $('tune').value = p.tune; $('verb').value = p.verb;
+  cur().preset = p; $('tune').value = p.tune; $('verb').value = p.verb;
   document.querySelectorAll('.pad').forEach(b => b.setAttribute('aria-pressed', b.dataset.id === p.id));
-  send(true);
+  send(); renderTracks();
 }
-$('pitch0').onclick = () => { $('pitch').value = 0; send(false); };
-$('gate').onchange = () => send(false);
+$('pitch0').onclick = () => { $('pitch').value = 0; send(); };
+$('gate').onchange = () => send();
 $('polish').onchange = () => wirePolish();
-['pitch','tune','verb','vol','thick','echo'].forEach(id => $(id).oninput = () => send(false));
+['pitch','tune','verb','vol','thick','echo'].forEach(id => $(id).oninput = () => send());
 // ---- starting note: a reference tone to sing from; it also sets the key everything is tuned to ----
 let drone = null, ringing = [];
 const hz = m => 440 * Math.pow(2, (m - 69) / 12);
@@ -634,14 +684,14 @@ function setDrone() {
 }
 function setRef(m, play) {
   refMidi = Math.max(41, Math.min(64, m)); $('key').value = refMidi % 12;
-  send(false); setDrone(); if (play) playNote();
+  send(); setDrone(); if (play) playNote();
 }
 $('playnote').onclick = playNote;
 $('notedown').onclick = () => setRef(refMidi - 1, true);
 $('noteup').onclick = () => setRef(refMidi + 1, true);
 $('hold').onchange = setDrone;
 $('key').onchange = () => setRef(48 + +$('key').value, true);
-$('scale').onchange = () => { send(false); playNote(); };
+$('scale').onchange = () => { send(); playNote(); };
 
 // ---- audio ----
 function makeIR(seconds) {
@@ -662,7 +712,7 @@ async function openMic(deviceId) {
     deviceId: deviceId ? { exact: deviceId } : undefined,
     echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 } });
   if (src) src.disconnect();
-  src = ctx.createMediaStreamSource(stream); src.connect(vox);
+  src = ctx.createMediaStreamSource(stream); src.connect(vox); if (recT) src.connect(recT.ch.node);
   const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput');
   const cur = stream.getAudioTracks()[0].getSettings().deviceId, sel = $('mic');
   sel.innerHTML = ''; devs.forEach(d => sel.add(new Option(d.label || 'Microphone', d.deviceId, false, d.deviceId === cur)));
@@ -672,20 +722,24 @@ function wirePolish() {
   master.disconnect(); polishOut.disconnect();
   if ($('polish').checked) { master.connect(polishIn); polishOut.connect(tap); } else master.connect(tap);
 }
+function makeChannel(S) { // one engine with its own volume, reverb send and echo send
+  const node = new AudioWorkletNode(ctx, 'vox', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
+  const out = ctx.createGain(), vs = ctx.createGain(), es = ctx.createGain(); out.gain.value = 0; vs.gain.value = 0; es.gain.value = 0;
+  node.connect(out); out.connect(master); out.connect(vs).connect(verbNode); out.connect(es).connect(echoIn);
+  node.port.onmessage = e => onStatus(S, e.data);
+  S.ch = { node, out, vs, es };
+}
 async function start() {
   ctx = new AudioContext({ latencyHint: 0 });
   const url = 'data:text/javascript;base64,' + btoa(unescape(encodeURIComponent($('worklet').textContent)));
   await ctx.audioWorklet.addModule(url);
-  vox = new AudioWorkletNode(ctx, 'vox', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
   tap = new AudioWorkletNode(ctx, 'tap', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: 'explicit' });
-  const verb = ctx.createConvolver(); verb.buffer = makeIR(2.6);
-  wet = ctx.createGain(); master = ctx.createGain(); wet.gain.value = 0; master.gain.value = 0;
-  vox.connect(master); vox.connect(verb); verb.connect(wet); wet.connect(master);
+  master = ctx.createGain(); master.gain.value = 0;
+  verbNode = ctx.createConvolver(); verbNode.buffer = makeIR(2.6); verbNode.connect(master);
   // echo: a filtered repeat that feeds back into itself
-  echoSend = ctx.createGain(); echoSend.gain.value = 0;
-  const dly = ctx.createDelay(1), elp = ctx.createBiquadFilter(), efb = ctx.createGain();
-  dly.delayTime.value = 0.33; elp.frequency.value = 2600; efb.gain.value = 0.4;
-  vox.connect(echoSend).connect(dly).connect(elp).connect(master); elp.connect(efb).connect(dly); elp.connect(verb);
+  const elp = ctx.createBiquadFilter(), efb = ctx.createGain();
+  echoIn = ctx.createDelay(1); echoIn.delayTime.value = 0.33; elp.frequency.value = 2600; efb.gain.value = 0.4;
+  echoIn.connect(elp).connect(master); elp.connect(efb).connect(echoIn); elp.connect(verbNode);
   // studio polish: cut rumble and mud, add air, even out the level
   const f = (type, freq, gain, q) => { const b = ctx.createBiquadFilter(); b.type = type; b.frequency.value = freq; if (gain) b.gain.value = gain; if (q) b.Q.value = q; return b; };
   polishIn = f('highpass', 90); const mud = f('peaking', 280, -3, 1), air = f('highshelf', 7500, 5), comp = ctx.createDynamicsCompressor();
@@ -693,25 +747,26 @@ async function start() {
   polishOut = ctx.createGain(); polishOut.gain.value = 1.3;
   polishIn.connect(mud).connect(air).connect(comp).connect(polishOut);
   tap.connect(ctx.destination); wirePolish();
-  vox.port.onmessage = e => onStatus(e.data);
+  makeChannel(liveS); vox = liveS.ch.node;
   vox.port.postMessage({ type: 'mode', mode });
   tap.port.onmessage = e => takeChunks.push(e.data);
   await openMic();
   await ctx.resume();
-  choose(preset);
+  // how late a layer lands when you sing along to what you hear (large on Bluetooth)
+  const inLat = stream.getAudioTracks()[0].getSettings().latency || 0;
+  $('sync').value = Math.min(500, Math.round(((ctx.outputLatency || 0) + ctx.baseLatency + inLat) * 1000));
+  loadUI(liveS);
+  setInterval(tick, 50);
 }
 function setMode(m) {
+  if (mode === 'tape' && m !== 'tape' && ctx) { if (recT) stopRec(); stopAll(); }
   mode = m;
   document.querySelectorAll('#mode button').forEach(b => b.setAttribute('aria-pressed', b.dataset.m === m));
   $('loopPanel').hidden = m !== 'live'; $('tapePanel').hidden = m !== 'tape';
   $('hint').textContent = m === 'live' ? 'Pick a sound and sing.' : 'Record yourself, then switch sounds while it plays back.';
-  if (vox) vox.port.postMessage({ type: 'mode', mode: m });
+  if (vox) { vox.port.postMessage({ type: 'mode', mode: m }); loadUI(cur()); renderTracks(); metroSync(); }
 }
 document.querySelectorAll('#mode button').forEach(b => b.onclick = () => setMode(b.dataset.m));
-const tapeCmd = cmd => vox && vox.port.postMessage({ type: 'tape', cmd });
-$('tape').onclick = () => { if (rendering) return; tapeCmd(tapeState !== 'idle' ? 'stop' : tapeLen ? 'play' : 'rec'); };
-$('rerec').onclick = () => tapeCmd('rec');
-$('render').onclick = () => { rendering = 1; takeChunks = []; tap.port.postMessage(true); tapeCmd('once'); $('render').textContent = 'Saving…'; };
 
 async function begin(m) {
   $('go').disabled = $('goTape').disabled = true; $('err').hidden = true;
@@ -726,9 +781,123 @@ $('go').onclick = () => begin('live');
 $('goTape').onclick = () => begin('tape');
 $('mic').onchange = () => openMic($('mic').value).catch(() => {});
 
-// ---- status from the engine ----
+// ---- layers: each one is a recording with its own sound, all looping on one clock ----
+const frameNow = () => Math.round(ctx.currentTime * ctx.sampleRate);
+const beatLen = () => Math.round(ctx.sampleRate * 60 / +$('bpm').value);
+const latency = () => Math.round(+$('sync').value / 1000 * ctx.sampleRate);
+const tcmd = (T, m) => T.ch.node.port.postMessage({ type: 'tape', ...m });
+const offOf = T => T.synced ? latency() : 0;
+function playAll() {
+  t0 = frameNow() + Math.round(0.08 * ctx.sampleRate);
+  tracks.forEach(T => tcmd(T, { cmd: 'play', t0, loopLen, off: offOf(T) }));
+  playing = true; metroSync();
+}
+function stopAll() { tracks.forEach(T => tcmd(T, { cmd: 'stop' })); playing = false; metroSync(); }
+function record() {
+  if (recT || rendering || tracks.length >= 8) return;
+  const sr = ctx.sampleRate, first = !tracks.length, click = $('metro').checked && (first || grid);
+  if (first) grid = click;
+  const T = newSet({ ...cur(), vol: 100, mute: false, solo: false, name: 'Layer ' + (++trackN), synced: !first || click });
+  makeChannel(T); T.ch.node.port.postMessage({ type: 'mode', mode: 'tape' });
+  src.connect(T.ch.node);
+  t0 = frameNow() + Math.round(0.1 * sr) + (click ? 4 * beatLen() : 0); // four clicks first, if the metronome is on
+  tracks.forEach(x => tcmd(x, { cmd: 'play', t0, loopLen, off: offOf(x) }));
+  tcmd(T, { cmd: 'rec', t0, loopLen: first ? 0 : loopLen, off: offOf(T), max: first ? sr * 120 : loopLen + Math.round(0.6 * sr) });
+  tracks.push(T); recT = T; stopping = false; playing = !first;
+  apply(T); renderTracks(); metroSync(true);
+}
+function stopRec() { if (recT && !stopping) { stopping = true; tcmd(recT, { cmd: 'recstop' }); } }
+function finishRec(T, s) {
+  recT = null; stopping = false; try { src.disconnect(T.ch.node); } catch {}
+  const sr = ctx.sampleRate, first = !loopLen, used = s.tlen - offOf(T);
+  if (used < 0.3 * sr) { removeTrack(T); return; } // too short to be a take
+  if (first) { // the first layer sets the loop; with the metronome on it is trimmed to whole bars
+    const bar = 4 * beatLen();
+    loopLen = grid ? Math.max(1, Math.round(used / bar)) * bar : s.tlen;
+    playAll();
+  }
+  sel = T; loadUI(T); renderTracks();
+}
+function removeTrack(T) {
+  if (T === recT) { recT = null; stopping = false; }
+  tcmd(T, { cmd: 'stop' }); const c = T.ch; setTimeout(() => { try { src.disconnect(c.node); } catch {} c.node.disconnect(); c.out.disconnect(); c.vs.disconnect(); c.es.disconnect(); }, 100);
+  tracks = tracks.filter(x => x !== T); if (sel === T) sel = tracks[tracks.length - 1] || null;
+  if (!tracks.length) { loopLen = 0; grid = false; playing = false; trackN = 0; }
+  loadUI(cur()); renderTracks(); metroSync();
+}
+function renderTracks() {
+  const box = $('tracks'); box.innerHTML = '';
+  tracks.forEach(T => {
+    const row = document.createElement('div'); row.className = 'trk' + (T === sel ? ' sel' : '') + (T === recT ? ' recg' : '');
+    row.innerHTML = `<button class="tname"><b>${T.name}</b><span>${T === recT ? 'Recording…' : T.preset.name}</span></button>
+      <button class="btn sm${T.solo ? ' on' : ''}" data-a="solo" title="Hear only this layer">Solo</button>
+      <button class="btn sm${T.mute ? ' on' : ''}" data-a="mute" title="Silence this layer">Mute</button>
+      <input type="range" min="0" max="100" value="${T.vol}" aria-label="${T.name} volume" title="Layer volume">
+      <button class="btn sm" data-a="del" aria-label="Delete ${T.name}" title="Delete this layer">✕</button>`;
+    row.querySelector('.tname').onclick = () => { if (T !== recT) { sel = T; loadUI(T); renderTracks(); } };
+    row.querySelector('[data-a=solo]').onclick = () => { T.solo = !T.solo; send(); renderTracks(); };
+    row.querySelector('[data-a=mute]').onclick = () => { T.mute = !T.mute; send(); renderTracks(); };
+    row.querySelector('[data-a=del]').onclick = () => removeTrack(T);
+    row.querySelector('input').oninput = e => { T.vol = +e.target.value; apply(T); };
+    box.appendChild(row);
+  });
+}
+$('tape').onclick = () => { if (rendering || !ctx) return; if (recT) stopRec(); else if (playing) stopAll(); else if (tracks.length) playAll(); else record(); };
+$('addlayer').onclick = () => record();
+$('sync').oninput = () => { send(); tracks.forEach(T => tcmd(T, { cmd: 'off', off: offOf(T) })); };
+$('render').onclick = () => { // play the loop through once, as you hear it, and save it
+  if (!tracks.length || recT || rendering) return;
+  rendering = true; stopAll(); takeChunks = []; tap.port.postMessage(true); playAll();
+  setTimeout(() => { stopAll(); setTimeout(() => { tap.port.postMessage(false);
+    setTimeout(() => { saveWav($('dl2'), 'vocal-booth-mix.wav'); rendering = false; }, 150); }, 2500); }, loopLen / ctx.sampleRate * 1000 + 80);
+};
+function tick() { // keep the transport button, ring and hints current
+  const sr = ctx.sampleRate, fr = frameNow() - t0, counting = recT && fr < 0, first = recT && !loopLen;
+  $('tape').classList.toggle('rec', !!recT);
+  $('tapeLabel').textContent = counting ? 'Get ready' : recT || playing ? 'Stop' : tracks.length ? 'Play' : 'Record';
+  const prog = loopLen && (playing || recT) && fr >= 0 ? (fr % loopLen) / loopLen : first && fr > 0 ? fr / (sr * 120) : 0;
+  $('tprog').style.strokeDashoffset = 289 * (1 - prog);
+  $('addlayer').disabled = !tracks.length || !!recT || rendering || tracks.length >= 8;
+  $('render').disabled = !tracks.length || !!recT || rendering; $('render').textContent = rendering ? 'Saving…' : 'Save the mix';
+  $('tapeHint').textContent = counting ? 'Four clicks, then sing.'
+    : first ? `Recording… ${Math.max(0, fr / sr).toFixed(0)}s. Press Space to stop.`
+    : recT ? 'Recording a layer over the loop. It stops by itself at the end, or press Space.'
+    : tracks.length ? `${(loopLen / sr).toFixed(1)}s loop. Tap a layer to select it; the sounds and sliders above change that layer only.`
+    : "Press Space and sing. You won't hear yourself while recording.";
+  const locked = !!loopLen && mode === 'tape';
+  $('bpm').disabled = locked && grid; $('metro').disabled = locked && !grid;
+  $('metroHint').textContent = !locked ? 'With it on, you get four clicks before recording and the loop is trimmed to fit the beat.'
+    : grid ? 'Tempo is locked while you have layers.' : 'These layers were recorded without the metronome. Delete them to use it.';
+}
+
+// ---- metronome: clicks go straight to your ears and are never saved ----
+let mBase = null, mK = 0, mFree = false;
+function click(at, accent) {
+  const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.value = accent ? 1760 : 1175;
+  g.gain.setValueAtTime(0.3, at); g.gain.exponentialRampToValueAtTime(0.001, at + 0.05);
+  o.connect(g).connect(ctx.destination); o.start(at); o.stop(at + 0.06);
+}
+function metroSync(countIn) {
+  if (!ctx) return;
+  const on = $('metro').checked, transport = mode === 'tape' && (recT || playing), free = on && !transport && (mode === 'live' || !tracks.length);
+  if (on && transport && grid) { mBase = t0; mK = countIn ? -4 : Math.ceil((frameNow() - t0) / beatLen()); mFree = false; }
+  else if (free) { if (!mFree) { mBase = frameNow() + Math.round(0.1 * ctx.sampleRate); mK = 0; mFree = true; } }
+  else { mBase = null; mFree = false; }
+}
+setInterval(() => {
+  if (mBase == null) return;
+  const sr = ctx.sampleRate, b = beatLen(), now = frameNow();
+  while (mBase + mK * b < now + 0.15 * sr) { const at = mBase + mK * b; if (at >= now) click(at / sr, ((mK % 4) + 4) % 4 === 0); mK++; }
+}, 40);
+$('metro').onchange = () => metroSync();
+$('bpm').oninput = () => { send(); if (mFree) { mFree = false; metroSync(); } };
+
+// ---- status from the engines ----
 let loopState = 'empty';
-function onStatus(s) {
+function onStatus(S, s) {
+  const focus = mode === 'live' ? liveS : recT || (playing && sel) || liveS; // whose pitch and level the meter shows
+  if (S === recT && s.armed && s.ts !== 'rec') finishRec(S, s);
+  if (S !== focus) return;
   const lv = $('level'); lv.style.width = Math.min(100, Math.sqrt(s.peak) * 110) + '%'; lv.classList.toggle('hot', s.peak > 0.9);
   const voiced = s.midi > 0, nt = $('note'), nd = $('needle');
   nt.classList.toggle('off', !voiced); nd.classList.toggle('on', voiced);
@@ -740,26 +909,13 @@ function onStatus(s) {
     if (keyFind) keyFind.h[((Math.round(s.midi) % 12) + 12) % 12]++;
   }
   autoKey(s);
+  if (S !== liveS) return;
   loopState = s.state;
   const lb = $('loop'); lb.classList.toggle('rec', s.state === 'rec' || s.state === 'dub');
   $('loopLabel').innerHTML = { empty:'Record<br>layer', rec:'Tap to<br>loop it', play:'Add<br>layer', dub:'Tap when<br>done' }[s.state];
   $('prog').style.strokeDashoffset = 289 * (1 - s.prog);
   const dots = $('dots'); if (dots.childElementCount !== s.layers) dots.innerHTML = '<i></i>'.repeat(s.layers);
   $('undo').disabled = s.state === 'empty'; $('clear').disabled = s.state === 'empty';
-  // record-first panel
-  tapeState = s.ts; tapeLen = s.tlen;
-  $('tape').classList.toggle('rec', s.ts === 'rec');
-  $('tapeLabel').textContent = s.ts !== 'idle' ? 'Stop' : s.tlen ? 'Play' : 'Record';
-  $('tprog').style.strokeDashoffset = 289 * (1 - s.tprog);
-  $('rerec').disabled = !s.tlen || s.ts === 'rec' || !!rendering; $('render').disabled = !s.tlen || s.ts === 'rec' || !!rendering;
-  $('tapeHint').textContent = s.ts === 'rec' ? `Recording… ${s.tlen.toFixed(0)}s. Press Space to stop.`
-    : s.tlen ? `${s.tlen.toFixed(1)}s recorded. It loops while playing, so try each sound, the key and the sliders.`
-    : "Press Space and sing. You won't hear yourself while recording.";
-  if (rendering === 1 && s.ts === 'play') rendering = 2;
-  else if (rendering === 2 && s.ts === 'idle') { // one pass done: wait for the reverb tail, then save
-    rendering = 3;
-    setTimeout(() => { tap.port.postMessage(false); setTimeout(() => { saveWav($('dl2'), 'vocal-booth-' + preset.id + '.wav'); rendering = 0; $('render').textContent = 'Save with effects'; }, 150); }, 2500);
-  }
 }
 $('loop').onclick = () => vox && vox.port.postMessage({ type: 'loop' });
 $('undo').onclick = () => vox.port.postMessage({ type: 'undo' });
@@ -799,7 +955,7 @@ function autoKey(s) {
 }
 $('findkey').onclick = () => {
   if (keyFind || !vox) return;
-  if (mode === 'tape' && tapeLen && tapeState === 'idle') tapeCmd('play'); // listen to the recording
+  if (mode === 'tape' && tracks.length && !playing && !recT) playAll(); // listen to the recording
   keyFind = { h: Array(12).fill(0) }; let left = 10;
   const tick = () => {
     if (left > 0) { $('keyhint').textContent = `Sing your melody… ${left--}`; setTimeout(tick, 1000); return; }
@@ -839,7 +995,7 @@ addEventListener('keydown', e => {
   else if (e.key >= '1' && e.key <= '8') choose(PRESETS[e.key - 1]);
   else if ((e.key === 'u' || e.key === 'Backspace') && mode === 'live') $('undo').click();
 });
-send(false);
+send();
 </script>
 </body>
 </html>
