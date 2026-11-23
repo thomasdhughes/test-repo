@@ -1,62 +1,569 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Modern Web Vocoder</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css" />
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vocal Booth</title>
+<style>
+/* Layout: one column, like the face of a small hardware box: meter on top, sound pads, three knobs, looper. */
+:root{
+  color-scheme:dark;
+  --bg:#14121a; --panel:#1e1b27; --panel2:#282433; --line:#373246;
+  --fg:#f1edf7; --dim:#9a93ab; --accent:#ffb347; --accent-ink:#2a1a00;
+  --rec:#ff5a6e; --ok:#6fe0b0;
+  --display:"Avenir Next","Futura","Trebuchet MS",system-ui,sans-serif;
+  --body:system-ui,-apple-system,"Helvetica Neue",sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 var(--body)}
+main{max-width:760px;margin:0 auto;padding:28px 16px 48px;display:flex;flex-direction:column;gap:18px}
+header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+h1{font:700 26px/1 var(--display);letter-spacing:.02em;margin:0}
+h1 span{color:var(--accent)}
+.label{font:600 11px/1 var(--body);letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+button,select{font:inherit;color:inherit}
+button{cursor:pointer}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* meter */
+.meter{display:grid;grid-template-columns:auto 1fr;gap:18px;align-items:center}
+.note{font:700 64px/1 var(--display);min-width:2.2ch;font-variant-numeric:tabular-nums}
+.note small{font-size:.4em;color:var(--dim);margin-left:2px}
+.note.off{color:var(--line)}
+.tuner{position:relative;height:34px;border-radius:8px;background:var(--panel2);overflow:hidden}
+.tuner::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:2px;background:var(--line)}
+.needle{position:absolute;top:4px;bottom:4px;width:6px;margin-left:-3px;border-radius:3px;background:var(--accent);left:50%;opacity:0;transition:left .06s linear,background .1s}
+.needle.on{opacity:1}.needle.good{background:var(--ok)}
+.level{height:5px;border-radius:3px;background:var(--panel2);margin-top:8px;overflow:hidden}
+.level i{display:block;height:100%;width:0;background:var(--ok)}
+.level i.hot{background:var(--rec)}
+.hint{color:var(--dim);font-size:13px;margin-top:6px;min-height:1.4em}
+
+/* pads */
+.pads{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+@media(max-width:560px){.pads{grid-template-columns:repeat(2,1fr)}.note{font-size:48px}}
+.pad{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 12px 12px;text-align:left;display:flex;flex-direction:column;gap:4px;min-height:86px;transition:transform .05s,background .12s,border-color .12s}
+.pad:active{transform:scale(.98)}
+.pad b{font:700 17px/1.1 var(--display)}
+.pad em{font-style:normal;font-size:12px;color:var(--dim);line-height:1.3}
+.pad kbd{font:11px var(--mono);color:var(--dim);margin-left:auto}
+.pad .top{display:flex;align-items:center;gap:6px}
+.pad[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.pad[aria-pressed="true"] em,.pad[aria-pressed="true"] kbd{color:var(--accent-ink);opacity:.75}
+
+/* controls */
+.controls{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+@media(max-width:560px){.controls{grid-template-columns:1fr}}
+.ctl{display:flex;flex-direction:column;gap:8px;min-width:0}
+.ctl .row{display:flex;justify-content:space-between;align-items:baseline}
+.ctl output{font:12px var(--mono);color:var(--dim)}
+input[type=range]{width:100%;accent-color:var(--accent);margin:0}
+.keyrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+select,.btn{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:8px 12px}
+.btn:hover{border-color:var(--dim)}
+.btn[disabled]{opacity:.4;cursor:default}
+.grow{flex:1}
+
+/* looper */
+.looper{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+.loopbtn{position:relative;width:104px;height:104px;border-radius:50%;border:none;background:var(--panel2);flex:none;display:grid;place-items:center}
+.loopbtn svg{position:absolute;inset:0;transform:rotate(-90deg)}
+.loopbtn circle{fill:none;stroke-width:6}
+.loopbtn .track{stroke:var(--line)}
+.loopbtn .prog{stroke:var(--accent);stroke-linecap:round;stroke-dasharray:289;stroke-dashoffset:289}
+.loopbtn span{position:relative;font:700 14px/1.15 var(--display);text-align:center}
+.loopbtn.rec{background:var(--rec);color:#2a0008}
+.loopbtn.rec .prog{stroke:#2a0008}
+.loopinfo{flex:1;min-width:200px;display:flex;flex-direction:column;gap:10px}
+.dots{display:flex;gap:6px;min-height:12px}
+.dots i{width:12px;height:12px;border-radius:50%;background:var(--accent)}
+.btnrow{display:flex;gap:10px;flex-wrap:wrap}
+.btn.recording{background:var(--rec);border-color:var(--rec);color:#2a0008}
+a.dl{color:var(--accent)}
+
+/* start overlay */
+#start{position:fixed;inset:0;background:var(--bg);display:grid;place-items:center;padding:24px;z-index:5}
+#start div{max-width:440px;text-align:center;display:flex;flex-direction:column;gap:18px;align-items:center}
+#start h2{font:700 40px/1.05 var(--display);margin:0}
+#start p{color:var(--dim);margin:0}
+#go{background:var(--accent);color:var(--accent-ink);border:none;border-radius:999px;padding:16px 34px;font:700 18px var(--display)}
+#err{color:var(--rec)}
+[hidden]{display:none!important}
+</style>
 </head>
 <body>
-  <header class="app-header">
-    <div class="header-text">
-      <p class="eyebrow">Web Vocoder</p>
-      <h1>Record your voice and play it back in creative ways</h1>
-      <p class="lede">
-        Click once to capture a sample, then explore modern Web Audio effects right in your browser—no downloads required.
-      </p>
-      <div class="cta-row">
-        <button id="recordButton" class="button primary">Request microphone &amp; start</button>
-        <button id="stopButton" class="button" disabled>Stop recording</button>
-      </div>
-      <p id="status" class="status">Ready when you are.</p>
-    </div>
-    <div class="header-visual" aria-hidden="true">
-      <div class="pulse"></div>
-      <div class="wave"></div>
-    </div>
+
+<div id="start">
+  <div>
+    <h2>Vocal <span style="color:var(--accent)">Booth</span></h2>
+    <p>Put on wired headphones first. Speakers will feed back, and Bluetooth headphones add a delay that makes singing hard.</p>
+    <button id="go">Start singing</button>
+    <p id="err" hidden></p>
+  </div>
+</div>
+
+<main>
+  <header>
+    <h1>Vocal <span>Booth</span></h1>
+    <select id="mic" aria-label="Microphone"></select>
   </header>
 
-  <main class="app-main">
-    <section class="panel">
-      <div class="panel-header">
-        <div>
-          <p class="eyebrow">Playback lab</p>
-          <h2>Choose an effect and listen</h2>
+  <section class="panel">
+    <div class="meter">
+      <div class="note off" id="note">–</div>
+      <div>
+        <div class="tuner"><div class="needle" id="needle"></div></div>
+        <div class="level"><i id="level"></i></div>
+      </div>
+    </div>
+    <div class="hint" id="hint">Pick a sound and sing.</div>
+  </section>
+
+  <section class="pads" id="pads" aria-label="Sounds"></section>
+
+  <section class="panel">
+    <div class="controls">
+      <div class="ctl">
+        <div class="row"><label class="label" for="tune">Auto-tune</label><output id="tuneOut"></output></div>
+        <input type="range" id="tune" min="0" max="100" value="100">
+      </div>
+      <div class="ctl">
+        <div class="row"><label class="label" for="verb">Reverb</label><output id="verbOut"></output></div>
+        <input type="range" id="verb" min="0" max="100" value="25">
+      </div>
+      <div class="ctl">
+        <div class="row"><label class="label" for="vol">Volume</label><output id="volOut"></output></div>
+        <input type="range" id="vol" min="0" max="100" value="80">
+      </div>
+    </div>
+    <div class="keyrow" style="margin-top:16px">
+      <span class="label">Key</span>
+      <select id="key" aria-label="Key"></select>
+      <select id="scale" aria-label="Scale">
+        <option value="major">Major</option>
+        <option value="minor">Minor</option>
+        <option value="chromatic">Any note</option>
+      </select>
+      <button class="btn" id="findkey">Find my key</button>
+      <span class="hint grow" id="keyhint" style="margin:0"></span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="looper">
+      <button class="loopbtn" id="loop" aria-label="Loop">
+        <svg viewBox="0 0 104 104"><circle class="track" cx="52" cy="52" r="46"/><circle class="prog" id="prog" cx="52" cy="52" r="46"/></svg>
+        <span id="loopLabel">Record<br>layer</span>
+      </button>
+      <div class="loopinfo">
+        <div class="label">Layers <span style="letter-spacing:0;text-transform:none;font-weight:400">— press Space to record, Space again to loop it, then stack more on top</span></div>
+        <div class="dots" id="dots"></div>
+        <div class="btnrow">
+          <button class="btn" id="undo" disabled>Undo layer</button>
+          <button class="btn" id="clear" disabled>Clear</button>
+          <button class="btn" id="take">Save a take</button>
+          <span id="dl"></span>
         </div>
-        <div class="chip" id="durationChip" aria-live="polite">No recording yet</div>
       </div>
-      <div id="effectsGrid" class="effects-grid" aria-live="polite">
-        <!-- Cards inserted via JavaScript -->
-      </div>
-    </section>
+    </div>
+  </section>
+</main>
 
-    <section class="panel secondary">
-      <h3>Tips</h3>
-      <ul>
-        <li>Use headphones to avoid feedback while experimenting.</li>
-        <li>Record again at any time; the new take replaces the previous one.</li>
-        <li>If you deny microphone access accidentally, re-enable it in your browser settings.</li>
-      </ul>
-    </section>
-  </main>
+<script type="text/plain" id="worklet">
+// ---------- Voice engine: pitch detect (YIN) -> snap to scale -> pitch-synchronous grains (formant-preserving) + looper ----------
+class Vox extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    const sr = sampleRate;
+    this.N = 32768; this.mask = this.N - 1;
+    this.inBuf = new Float32Array(this.N); this.w = 0;
+    this.ON = 16384; this.omask = this.ON - 1;
+    this.outL = new Float32Array(this.ON); this.outR = new Float32Array(this.ON); this.o = 0;
+    // detector (runs on a decimated copy)
+    this.D = sr > 60000 ? 4 : 2; this.dsr = sr / this.D;
+    this.dN = 4096; this.dmask = this.dN - 1; this.dBuf = new Float32Array(this.dN); this.dw = 0;
+    this.dacc = 0; this.dcnt = 0;
+    this.W = Math.round(this.dsr * 0.024);
+    this.tauMax = Math.floor(this.dsr / 62); this.tauMin = Math.floor(this.dsr / 1100);
+    this.fr = new Float32Array(this.W + this.tauMax + 1);
+    this.yin = new Float32Array(this.tauMax + 1);
+    this.hop = 256; this.hopCnt = 0;
+    this.defP = sr / 180; this.period = this.defP; this.voiced = false;
+    this.lastMidi = 0; this.rawMidi = 0; this.slope = 0; this.jump = 0; this.hold = 0;
+    // tuning
+    this.key = 0; this.scale = [1,0,1,0,1,1,0,1,0,1,0,1]; this.chrom = false;
+    this.tune = 1; this.sc = 0; this.note = -1; this.dry = 0;
+    this.voices = [];
+    // input filter
+    this.hpX = 0; this.hpY = 0; this.hpA = Math.exp(-2 * Math.PI * 70 / sr);
+    this.peak = 0; this.rep = 0;
+    // looper
+    this.maxLen = Math.floor(sr * 60); this.state = 'empty';
+    this.layers = []; this.loopLen = 0; this.pos = 0;
+    this.recGain = 0; this.recTarget = 0; this.recStep = 1 / (0.012 * sr);
+    this.port.onmessage = e => this.msg(e.data);
+  }
+  msg(m) {
+    if (m.type === 'params') {
+      this.key = m.key; this.scale = m.scale; this.chrom = m.scale.every(x => x);
+      this.tune = m.tune; this.dry = m.dry;
+      if (m.voices) this.voices = m.voices.map(v => {
+        const a = (v.pan + 1) * Math.PI / 4;
+        return { mode: v.mode, val: v.val, cents: v.cents || 0, formant: v.formant || 1, lead: !!v.lead,
+                 gl: Math.cos(a) * v.gain * 1.414, gr: Math.sin(a) * v.gain * 1.414, ratio: 1, next: 0, c: NaN };
+      });
+      this.note = -1;
+    } else if (m.type === 'loop') this.loopPress();
+    else if (m.type === 'undo') this.undo();
+    else if (m.type === 'clear') { this.layers = []; this.state = 'empty'; this.recTarget = 0; this.recGain = 0; this.loopLen = 0; }
+  }
+  // ----- looper -----
+  loopPress() {
+    const sr = sampleRate;
+    if (this.state === 'empty') {
+      this.rec = [new Float32Array(this.maxLen), new Float32Array(this.maxLen)];
+      this.pos = 0; this.state = 'rec';
+    } else if (this.state === 'rec') this.finishFirst();
+    else if (this.state === 'play') {
+      if (this.layers.length >= 8) { // fold the two oldest together
+        const a = this.layers.shift(), b = this.layers[0];
+        for (let i = 0; i < this.loopLen; i++) { b[0][i] += a[0][i]; b[1][i] += a[1][i]; }
+      }
+      this.layers.push([new Float32Array(this.loopLen), new Float32Array(this.loopLen)]);
+      this.recTarget = 1; this.state = 'dub';
+    } else if (this.state === 'dub') { this.recTarget = 0; this.state = 'play'; }
+  }
+  finishFirst() {
+    const len = this.pos, f = Math.min(Math.floor(0.01 * sampleRate), len >> 1);
+    if (len < sampleRate * 0.25) { this.state = 'empty'; this.rec = null; return; }
+    const L = this.rec[0].slice(0, len), R = this.rec[1].slice(0, len);
+    for (let i = 0; i < f; i++) { const g = i / f; L[i] *= g; R[i] *= g; L[len - 1 - i] *= g; R[len - 1 - i] *= g; }
+    this.rec = null; this.layers = [[L, R]]; this.loopLen = len; this.pos = 0; this.state = 'play';
+  }
+  undo() {
+    if (this.state === 'rec') { this.state = 'empty'; this.rec = null; return; }
+    if (!this.layers.length) return;
+    this.layers.pop(); this.recTarget = 0; this.recGain = 0;
+    if (this.layers.length) this.state = 'play'; else { this.state = 'empty'; this.loopLen = 0; }
+  }
+  // ----- scale helpers -----
+  inScale(n) { return this.scale[(((n - this.key) % 12) + 12) % 12]; }
+  snap(m) {
+    const r = Math.round(m); let best = r, bd = 99;
+    for (let n = r - 3; n <= r + 3; n++) if (this.inScale(n)) { const d = Math.abs(n - m); if (d < bd) { bd = d; best = n; } }
+    if (this.note >= 0 && best !== this.note && this.inScale(this.note) && Math.abs(m - this.note) < bd + 0.25) return this.note;
+    return best;
+  }
+  degree(t, k) {
+    if (k === 0) return 0;
+    if (this.chrom) { const maj = [0,2,4,5,7,9,11]; return 12 * Math.floor(k / 7) + maj[((k % 7) + 7) % 7]; }
+    const dir = k > 0 ? 1 : -1; let n = t, c = 0;
+    while (c < Math.abs(k)) { n += dir; if (this.inScale(n)) c++; }
+    return n - t;
+  }
+  // ----- pitch detection -----
+  detect() {
+    const W = this.W, tm = this.tauMax, n = W + tm, fr = this.fr, y = this.yin;
+    let e = 0;
+    for (let i = 0; i < n; i++) { const s = this.dBuf[(this.dw - 1 - i) & this.dmask]; fr[i] = s; e += s * s; }
+    const was = this.voiced;
+    let tau = -1;
+    if (Math.sqrt(e / n) > 0.004) {
+      let run = 0, gmin = 9, gi = -1; y[0] = 1;
+      for (let t = 1; t <= tm; t++) {
+        let s = 0;
+        for (let j = 0; j < W; j++) { const d = fr[j] - fr[j + t]; s += d * d; }
+        run += s; y[t] = run > 0 ? s * t / run : 1;
+        if (t >= this.tauMin && y[t] < gmin) { gmin = y[t]; gi = t; }
+      }
+      for (let t = this.tauMin; t < tm; t++) if (y[t] < 0.15) { while (t + 1 < tm && y[t + 1] < y[t]) t++; tau = t; break; }
+      if (tau < 0 && gmin < 0.3) tau = gi;
+      if (tau > 0 && tau < tm) { // parabolic refine
+        const a = y[tau - 1], b = y[tau], c = y[tau + 1], den = a - 2 * b + c;
+        if (den > 0) tau += 0.5 * (a - c) / den;
+      }
+    }
+    if (tau <= 0) {
+      if (was && this.hold < 2) { this.hold++; return; } // ride through a one-frame dropout
+      this.voiced = false; this.sc = 0; return;
+    }
+    this.hold = 0;
+    const f = this.dsr / tau; let m = 69 + 12 * Math.log2(f / 440);
+    if (was) { // ignore brief octave flips
+      const d = Math.abs(m - this.lastMidi);
+      if (d > 10 && d < 14 && this.jump < 4) { this.jump++; return; }
+    }
+    const raw = m, hopT = this.hop / sampleRate;
+    this.slope = was && this.jump === 0 ? this.slope + 0.5 * ((raw - this.rawMidi) / hopT - this.slope) : 0;
+    this.rawMidi = raw;
+    const lag = (W + tau) / 2 / this.dsr - 1.5 / f;
+    if (lag > 0) m += Math.max(-0.5, Math.min(0.5, this.slope * lag));
+    this.jump = 0; this.lastMidi = m; this.voiced = true; this.period = sampleRate / f * Math.pow(2, (raw - m) / 12);
+    const t = this.snap(m); this.note = t;
+    const corr = this.tune > 0 ? t - m : 0;
+    if (!was || this.tune >= 0.999) this.sc = corr;
+    else { const tc = 0.35 * (1 - this.tune) * (1 - this.tune) + 0.004; this.sc += (corr - this.sc) * (1 - Math.exp(-(this.hop / sampleRate) / tc)); }
+    for (const v of this.voices) {
+      const semis = this.sc + (v.mode === 'deg' ? this.degree(t, v.val) : v.val) + v.cents / 100;
+      v.ratio = Math.pow(2, semis / 12);
+    }
+  }
+  // ----- one grain -----
+  grain(v, frac, at) {
+    const voiced = this.voiced, P = voiced ? this.period : this.defP, f = v.formant;
+    if (!voiced && !v.lead) { v.next += P; return; }
+    const ratio = voiced ? v.ratio : f;
+    v.next += P / ratio;
+    const ideal = this.w - P - 3;
+    let c = v.c;
+    if (!(c > ideal - 6 * P && c < ideal + 2 * P)) c = ideal; else c += Math.floor((ideal - c) / P) * P;
+    v.c = c;
+    const Lout = 2 * P / f, norm = 1 / Math.sqrt(Math.max(0.25, ratio / f));
+    const gl = v.gl * norm, gr = v.gr * norm, k = 2 * Math.PI / Lout, buf = this.inBuf, mask = this.mask;
+    const start = c - P, len = Math.ceil(Lout);
+    for (let i = 0; i < len; i++) {
+      const tg = i + frac; if (tg >= Lout) break;
+      const sp = start + tg * f, ip = Math.floor(sp), x = sp - ip;
+      const y0 = buf[(ip - 1) & mask], y1 = buf[ip & mask], y2 = buf[(ip + 1) & mask], y3 = buf[(ip + 2) & mask];
+      const s = y1 + 0.5 * x * (y2 - y0 + x * (2 * y0 - 5 * y1 + 4 * y2 - y3 + x * (3 * (y1 - y2) + y3 - y0)));
+      const wv = s * (0.5 - 0.5 * Math.cos(k * tg)), oi = (at + i) & this.omask;
+      this.outL[oi] += wv * gl; this.outR[oi] += wv * gr;
+    }
+  }
+  process(inputs, outputs) {
+    const inp = inputs[0] && inputs[0][0], out = outputs[0], oL = out[0], oR = out[1] || out[0], n = oL.length;
+    const vs = this.voices, nv = vs.length;
+    for (let i = 0; i < n; i++) {
+      const raw = inp ? inp[i] : 0;
+      const x = raw - this.hpX + this.hpA * this.hpY; this.hpX = raw; this.hpY = x; // high-pass
+      const ax = x < 0 ? -x : x; if (ax > this.peak) this.peak = ax;
+      this.inBuf[this.w & this.mask] = x; this.w++;
+      this.dacc += x;
+      if (++this.dcnt === this.D) { this.dBuf[this.dw & this.dmask] = this.dacc / this.D; this.dw++; this.dacc = 0; this.dcnt = 0; }
+      if (++this.hopCnt >= this.hop) { this.hopCnt = 0; this.detect(); }
+      const oi = (this.o + i) & this.omask;
+      for (let j = 0; j < nv; j++) { const v = vs[j]; v.next -= 1; if (v.next <= 0) this.grain(v, -v.next, this.o + i); }
+      let l = this.outL[oi] + x * this.dry, r = this.outR[oi] + x * this.dry;
+      this.outL[oi] = 0; this.outR[oi] = 0;
+      // looper: plays under the live voice, records the processed voice
+      let ll = 0, lr = 0;
+      if (this.state === 'rec') {
+        this.rec[0][this.pos] = l; this.rec[1][this.pos] = r;
+        if (++this.pos >= this.maxLen) this.finishFirst();
+      } else if (this.loopLen) {
+        const p = this.pos, ly = this.layers;
+        for (let j = 0; j < ly.length; j++) { ll += ly[j][0][p]; lr += ly[j][1][p]; }
+        if (this.recGain < this.recTarget) this.recGain = Math.min(1, this.recGain + this.recStep);
+        else if (this.recGain > this.recTarget) this.recGain = Math.max(0, this.recGain - this.recStep);
+        if (this.recGain > 0 && ly.length) { const t = ly[ly.length - 1]; t[0][p] += l * this.recGain; t[1][p] += r * this.recGain; }
+        if (++this.pos >= this.loopLen) this.pos = 0;
+      }
+      oL[i] = Math.tanh(l + ll); oR[i] = Math.tanh(r + lr);
+    }
+    this.o += n;
+    this.rep += n;
+    if (this.rep >= 1024) {
+      this.rep = 0;
+      this.port.postMessage({ midi: this.voiced ? this.lastMidi : -1, note: this.note, peak: this.peak, state: this.state,
+        layers: this.layers.length, prog: this.state === 'rec' ? this.pos / this.maxLen : (this.loopLen ? this.pos / this.loopLen : 0) });
+      this.peak = 0;
+    }
+    return true;
+  }
+}
+registerProcessor('vox', Vox);
 
-  <footer class="app-footer">
-    <p>Built with the modern Web Audio API. Your audio stays in the browser.</p>
-  </footer>
+// Taps the final mix so a take can be saved as a WAV.
+class Tap extends AudioWorkletProcessor {
+  constructor() { super(); this.on = false; this.buf = new Float32Array(8192); this.n = 0;
+    this.port.onmessage = e => { this.on = e.data; if (!this.on) this.flush(); }; }
+  flush() { if (this.n) { this.port.postMessage(this.buf.slice(0, this.n)); this.n = 0; } }
+  process(inputs, outputs) {
+    const a = inputs[0], o = outputs[0]; if (!a || !a[0]) return true;
+    const L = a[0], R = a[1] || a[0];
+    for (let i = 0; i < L.length; i++) {
+      o[0][i] = L[i]; if (o[1]) o[1][i] = R[i];
+      if (this.on) { this.buf[this.n++] = L[i]; this.buf[this.n++] = R[i]; if (this.n >= 8192) this.flush(); }
+    }
+    return true;
+  }
+}
+registerProcessor('tap', Tap);
+</script>
 
-  <script type="module" src="app.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const NOTES = ['C','C♯','D','E♭','E','F','F♯','G','A♭','A','B♭','B'];
+const SCALES = { major:[1,0,1,0,1,1,0,1,0,1,0,1], minor:[1,0,1,1,0,1,0,1,1,0,1,0], chromatic:Array(12).fill(1) };
+const lead = (o={}) => ({mode:'semi',val:0,pan:0,gain:1,lead:true,...o});
+const deg = (val,pan,gain,o={}) => ({mode:'deg',val,pan,gain,...o});
+const PRESETS = [
+  { id:'clean',  name:'Clean',     desc:'Just you, with a little room',            tune:0,   verb:20, dry:1, voices:[] },
+  { id:'smooth', name:'Smooth',    desc:'Gentle tuning nobody will notice',        tune:55,  verb:25, voices:[lead()] },
+  { id:'hard',   name:'Hard Tune', desc:'The snapped, robotic pop-rap sound',      tune:100, verb:22, voices:[lead()] },
+  { id:'harm',   name:'Harmony',   desc:'Three of you singing in key',             tune:100, verb:32, voices:[lead(), deg(2,-.7,.6), deg(4,.7,.5), deg(-3,0,.5)] },
+  { id:'choir',  name:'Choir',     desc:'A huge stacked wall of voices',           tune:100, verb:50, voices:[lead({gain:.9}), deg(0,-.9,.45,{cents:-9}), deg(0,.9,.45,{cents:9}), deg(2,-.5,.55), deg(4,.5,.5), deg(-7,0,.6), deg(7,0,.22)] },
+  { id:'deep',   name:'Deep',      desc:'Pitched an octave down, dark and heavy',  tune:80,  verb:28, voices:[lead({val:-12,formant:.9})] },
+  { id:'high',   name:'High',      desc:'Pitched an octave up, bright and airy',   tune:100, verb:30, voices:[lead({val:12,formant:1.12,gain:.9})] },
+  { id:'oct',    name:'Octaves',   desc:'You, plus a low and a high double',       tune:100, verb:32, voices:[lead(), {mode:'semi',val:-12,pan:-.3,gain:.7,formant:.95}, {mode:'semi',val:12,pan:.3,gain:.3}] },
+];
+
+let ctx, vox, tap, wet, master, stream, src, preset = PRESETS[2];
+let keyFind = null, taking = false, takeChunks = [];
+
+// ---- UI build ----
+PRESETS.forEach((p, i) => {
+  const b = document.createElement('button');
+  b.className = 'pad'; b.dataset.id = p.id; b.setAttribute('aria-pressed', p === preset);
+  b.innerHTML = `<span class="top"><b>${p.name}</b><kbd>${i + 1}</kbd></span><em>${p.desc}</em>`;
+  b.onclick = () => choose(p);
+  $('pads').appendChild(b);
+});
+NOTES.forEach((n, i) => $('key').add(new Option(n, i)));
+try { const s = JSON.parse(localStorage.vb || '{}'); if (s.key != null) $('key').value = s.key; if (s.scale) $('scale').value = s.scale; } catch {}
+
+function send(withVoices) {
+  $('tuneOut').textContent = +$('tune').value === 0 ? 'off' : +$('tune').value === 100 ? 'hard' : $('tune').value;
+  $('verbOut').textContent = $('verb').value; $('volOut').textContent = $('vol').value;
+  try { localStorage.vb = JSON.stringify({ key: $('key').value, scale: $('scale').value }); } catch {}
+  if (!vox) return;
+  const t = ctx.currentTime;
+  wet.gain.setTargetAtTime(Math.pow($('verb').value / 100, 1.5) * 0.9, t, 0.05);
+  master.gain.setTargetAtTime(Math.pow($('vol').value / 100, 2) * 1.4, t, 0.03);
+  vox.port.postMessage({ type:'params', key:+$('key').value, scale:SCALES[$('scale').value],
+    tune: $('tune').value / 100, dry: preset.dry || 0, voices: withVoices ? preset.voices : null });
+}
+function choose(p) {
+  preset = p; $('tune').value = p.tune; $('verb').value = p.verb;
+  document.querySelectorAll('.pad').forEach(b => b.setAttribute('aria-pressed', b.dataset.id === p.id));
+  send(true);
+}
+['tune','verb','vol'].forEach(id => $(id).oninput = () => send(false));
+['key','scale'].forEach(id => $(id).onchange = () => send(false));
+
+// ---- audio ----
+function makeIR(seconds) {
+  const sr = ctx.sampleRate, n = Math.floor(sr * seconds), ir = ctx.createBuffer(2, n, sr), pre = Math.floor(sr * 0.018);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = ir.getChannelData(ch); let lp = 0;
+    for (let i = pre; i < n; i++) {
+      const t = (i - pre) / sr, a = 0.25 + 0.7 * Math.min(1, t / seconds); // darker as it decays
+      lp = a * lp + (1 - a) * (Math.random() * 2 - 1);
+      d[i] = lp * Math.exp(-t * 6.9 / seconds) * Math.min(1, t / 0.004);
+    }
+  }
+  return ir;
+}
+async function openMic(deviceId) {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({ audio: {
+    deviceId: deviceId ? { exact: deviceId } : undefined,
+    echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 } });
+  if (src) src.disconnect();
+  src = ctx.createMediaStreamSource(stream); src.connect(vox);
+  const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput');
+  const cur = stream.getAudioTracks()[0].getSettings().deviceId, sel = $('mic');
+  sel.innerHTML = ''; devs.forEach(d => sel.add(new Option(d.label || 'Microphone', d.deviceId, false, d.deviceId === cur)));
+}
+async function start() {
+  ctx = new AudioContext({ latencyHint: 0 });
+  const url = 'data:text/javascript;base64,' + btoa(unescape(encodeURIComponent($('worklet').textContent)));
+  await ctx.audioWorklet.addModule(url);
+  vox = new AudioWorkletNode(ctx, 'vox', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
+  tap = new AudioWorkletNode(ctx, 'tap', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: 'explicit' });
+  const verb = ctx.createConvolver(); verb.buffer = makeIR(2.6);
+  wet = ctx.createGain(); master = ctx.createGain(); wet.gain.value = 0; master.gain.value = 0;
+  vox.connect(master); vox.connect(verb); verb.connect(wet); wet.connect(master);
+  master.connect(tap); tap.connect(ctx.destination);
+  vox.port.onmessage = e => onStatus(e.data);
+  tap.port.onmessage = e => takeChunks.push(e.data);
+  await openMic();
+  await ctx.resume();
+  choose(preset);
+}
+$('go').onclick = async () => {
+  $('go').disabled = true; $('err').hidden = true;
+  try { await start(); $('start').hidden = true; }
+  catch (e) {
+    $('go').disabled = false; $('err').hidden = false;
+    $('err').textContent = e.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it in the address bar, then press Start again.'
+      : 'Could not start audio: ' + e.message;
+  }
+};
+$('mic').onchange = () => openMic($('mic').value).catch(() => {});
+
+// ---- status from the engine ----
+let loopState = 'empty';
+function onStatus(s) {
+  const lv = $('level'); lv.style.width = Math.min(100, Math.sqrt(s.peak) * 110) + '%'; lv.classList.toggle('hot', s.peak > 0.9);
+  const voiced = s.midi > 0, nt = $('note'), nd = $('needle');
+  nt.classList.toggle('off', !voiced); nd.classList.toggle('on', voiced);
+  if (voiced) {
+    const n = s.note >= 0 ? s.note : Math.round(s.midi), off = s.midi - n;
+    nt.innerHTML = NOTES[((n % 12) + 12) % 12] + '<small>' + (Math.floor(n / 12) - 1) + '</small>';
+    nd.style.left = (50 + Math.max(-1, Math.min(1, off)) * 46) + '%';
+    nd.classList.toggle('good', Math.abs(off) < 0.15);
+    if (keyFind) keyFind.h[((Math.round(s.midi) % 12) + 12) % 12]++;
+  }
+  loopState = s.state;
+  const lb = $('loop'); lb.classList.toggle('rec', s.state === 'rec' || s.state === 'dub');
+  $('loopLabel').innerHTML = { empty:'Record<br>layer', rec:'Tap to<br>loop it', play:'Add<br>layer', dub:'Tap when<br>done' }[s.state];
+  $('prog').style.strokeDashoffset = 289 * (1 - s.prog);
+  const dots = $('dots'); if (dots.childElementCount !== s.layers) dots.innerHTML = '<i></i>'.repeat(s.layers);
+  $('undo').disabled = s.state === 'empty'; $('clear').disabled = s.state === 'empty';
+}
+$('loop').onclick = () => vox && vox.port.postMessage({ type: 'loop' });
+$('undo').onclick = () => vox.port.postMessage({ type: 'undo' });
+$('clear').onclick = () => vox.port.postMessage({ type: 'clear' });
+
+// ---- find my key: listen for 10 s, match the notes sung against major/minor profiles ----
+$('findkey').onclick = () => {
+  if (keyFind) return;
+  keyFind = { h: Array(12).fill(0) }; let left = 10;
+  const tick = () => {
+    if (left > 0) { $('keyhint').textContent = `Sing your melody… ${left--}`; setTimeout(tick, 1000); return; }
+    const h = keyFind.h; keyFind = null;
+    if (h.reduce((a, b) => a + b, 0) < 40) { $('keyhint').textContent = "Didn't hear enough singing. Try again."; return; }
+    const maj = [6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88], min = [6.33,2.68,3.52,5.38,2.6,3.53,2.54,4.75,3.98,2.69,3.34,3.17];
+    const corr = (p, k) => { let mh = 0, mp = 0; for (let i = 0; i < 12; i++) { mh += h[i] / 12; mp += p[i] / 12; }
+      let a = 0, b = 0, c = 0; for (let i = 0; i < 12; i++) { const x = h[(i + k) % 12] - mh, y = p[i] - mp; a += x * y; b += x * x; c += y * y; } return a / Math.sqrt(b * c || 1); };
+    let best = -2, bk = 0, bs = 'major';
+    for (let k = 0; k < 12; k++) { const a = corr(maj, k), b = corr(min, k); if (a > best) { best = a; bk = k; bs = 'major'; } if (b > best) { best = b; bk = k; bs = 'minor'; } }
+    $('key').value = bk; $('scale').value = bs; send(false);
+    $('keyhint').textContent = `Set to ${NOTES[bk]} ${bs}.`;
+  };
+  tick();
+};
+
+// ---- save a take as WAV ----
+$('take').onclick = () => {
+  if (!tap) return;
+  taking = !taking; $('take').classList.toggle('recording', taking);
+  $('take').textContent = taking ? 'Stop and save' : 'Save a take';
+  if (taking) { takeChunks = []; tap.port.postMessage(true); return; }
+  tap.port.postMessage(false);
+  setTimeout(() => {
+    const n = takeChunks.reduce((a, c) => a + c.length, 0), dv = new DataView(new ArrayBuffer(44 + n * 2)), sr = ctx.sampleRate;
+    const str = (o, s) => [...s].forEach((ch, i) => dv.setUint8(o + i, ch.charCodeAt(0)));
+    str(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); str(8, 'WAVEfmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true);
+    dv.setUint16(22, 2, true); dv.setUint32(24, sr, true); dv.setUint32(28, sr * 4, true); dv.setUint16(32, 4, true); dv.setUint16(34, 16, true);
+    str(36, 'data'); dv.setUint32(40, n * 2, true);
+    let o = 44; for (const c of takeChunks) for (let i = 0; i < c.length; i++, o += 2) dv.setInt16(o, Math.max(-1, Math.min(1, c[i])) * 32767, true);
+    const a = document.createElement('a'); a.className = 'dl'; a.href = URL.createObjectURL(new Blob([dv], { type: 'audio/wav' }));
+    a.download = 'vocal-booth-take.wav'; a.textContent = 'Download take'; $('dl').replaceChildren(a); a.click();
+  }, 150);
+};
+
+// ---- keys ----
+addEventListener('keydown', e => {
+  if (!vox || e.metaKey || e.ctrlKey || e.target.tagName === 'SELECT') return;
+  if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) $('loop').click(); }
+  else if (e.key >= '1' && e.key <= '8') choose(PRESETS[e.key - 1]);
+  else if (e.key === 'u' || e.key === 'Backspace') $('undo').click();
+});
+send(false);
+</script>
 </body>
 </html>
