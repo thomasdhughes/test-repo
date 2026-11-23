@@ -139,6 +139,11 @@ a.dl{color:var(--accent)}
   <section class="pads" id="pads" aria-label="Sounds"></section>
 
   <section class="panel">
+    <div class="ctl" style="margin-bottom:18px">
+      <div class="row"><label class="label" for="pitch">Pitch</label><output id="pitchOut"></output></div>
+      <input type="range" id="pitch" min="-12" max="12" step="1" value="0">
+      <div class="row"><span class="hint" style="margin:0">Lower</span><button class="btn" id="pitch0" style="padding:3px 10px;font-size:12px">Reset</button><span class="hint" style="margin:0">Higher</span></div>
+    </div>
     <div class="controls">
       <div class="ctl">
         <div class="row"><label class="label" for="tune">Auto-tune</label><output id="tuneOut"></output></div>
@@ -226,7 +231,7 @@ class Vox extends AudioWorkletProcessor {
     this.lastMidi = 0; this.rawMidi = 0; this.slope = 0; this.jump = 0; this.hold = 0;
     // tuning
     this.key = 0; this.scale = [1,0,1,0,1,1,0,1,0,1,0,1]; this.chrom = false;
-    this.tune = 1; this.sc = 0; this.note = -1; this.dry = 0;
+    this.tune = 1; this.sc = 0; this.note = -1; this.dry = 0; this.shift = 0; this.fsh = 1;
     this.voices = [];
     // input filter
     this.hpX = 0; this.hpY = 0; this.hpA = Math.exp(-2 * Math.PI * 70 / sr);
@@ -257,7 +262,8 @@ class Vox extends AudioWorkletProcessor {
     }
     if (m.type === 'params') {
       this.key = m.key; this.scale = m.scale; this.chrom = m.scale.every(x => x);
-      this.tune = m.tune; this.dry = m.dry;
+      this.tune = m.tune; this.dry = m.shift ? 0 : m.dry;
+      this.shift = m.shift || 0; this.fsh = Math.pow(2, this.shift * 0.35 / 12); // voice character follows the pitch a little
       if (m.voices) this.voices = m.voices.map(v => {
         const a = (v.pan + 1) * Math.PI / 4;
         return { mode: v.mode, val: v.val, cents: v.cents || 0, formant: v.formant || 1, lead: !!v.lead,
@@ -355,13 +361,13 @@ class Vox extends AudioWorkletProcessor {
     if (!was || this.tune >= 0.999) this.sc = corr;
     else { const tc = 0.35 * (1 - this.tune) * (1 - this.tune) + 0.004; this.sc += (corr - this.sc) * (1 - Math.exp(-(this.hop / sampleRate) / tc)); }
     for (const v of this.voices) {
-      const semis = this.sc + (v.mode === 'deg' ? this.degree(t, v.val) : v.val) + v.cents / 100;
+      const semis = this.shift + this.sc + (v.mode === 'deg' ? this.degree(t, v.val) : v.val) + v.cents / 100;
       v.ratio = Math.pow(2, semis / 12);
     }
   }
   // ----- one grain -----
   grain(v, frac, at) {
-    const voiced = this.voiced, P = voiced ? this.period : this.defP, f = v.formant;
+    const voiced = this.voiced, P = voiced ? this.period : this.defP, f = v.formant * this.fsh;
     if (!voiced && !v.lead) { v.next += P; return; }
     const ratio = voiced ? v.ratio : f;
     v.next += P / ratio;
@@ -483,6 +489,7 @@ try { const s = JSON.parse(localStorage.vb || '{}'); if (s.key != null) $('key')
 
 function send(withVoices) {
   $('tuneOut').textContent = +$('tune').value === 0 ? 'off' : +$('tune').value === 100 ? 'hard' : $('tune').value;
+  const ps = +$('pitch').value; $('pitchOut').textContent = ps === 0 ? 'normal' : Math.abs(ps) === 12 ? (ps > 0 ? 'one octave higher' : 'one octave lower') : Math.abs(ps) + (ps > 0 ? ' higher' : ' lower');
   $('verbOut').textContent = $('verb').value; $('volOut').textContent = $('vol').value;
   try { localStorage.vb = JSON.stringify({ key: $('key').value, scale: $('scale').value }); } catch {}
   if (!vox) return;
@@ -490,14 +497,15 @@ function send(withVoices) {
   wet.gain.setTargetAtTime(Math.pow($('verb').value / 100, 1.5) * 0.9, t, 0.05);
   master.gain.setTargetAtTime(Math.pow($('vol').value / 100, 2) * 1.4, t, 0.03);
   vox.port.postMessage({ type:'params', key:+$('key').value, scale:SCALES[$('scale').value],
-    tune: $('tune').value / 100, dry: preset.dry || 0, voices: withVoices ? preset.voices : null });
+    tune: $('tune').value / 100, shift: +$('pitch').value, dry: preset.dry || 0, voices: withVoices ? preset.voices : null });
 }
 function choose(p) {
   preset = p; $('tune').value = p.tune; $('verb').value = p.verb;
   document.querySelectorAll('.pad').forEach(b => b.setAttribute('aria-pressed', b.dataset.id === p.id));
   send(true);
 }
-['tune','verb','vol'].forEach(id => $(id).oninput = () => send(false));
+$('pitch0').onclick = () => { $('pitch').value = 0; send(false); };
+['pitch','tune','verb','vol'].forEach(id => $(id).oninput = () => send(false));
 ['key','scale'].forEach(id => $(id).onchange = () => send(false));
 
 // ---- audio ----
