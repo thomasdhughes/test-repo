@@ -159,15 +159,22 @@ a.dl{color:var(--accent)}
       </div>
     </div>
     <div class="keyrow" style="margin-top:16px">
-      <span class="label">Key</span>
-      <select id="key" aria-label="Key"></select>
-      <select id="scale" aria-label="Scale">
-        <option value="major">Major</option>
-        <option value="minor">Minor</option>
+      <span class="label">Starting note</span>
+      <button class="btn" id="playnote" style="background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:700">▶ Play note</button>
+      <button class="btn" id="notedown">Lower</button>
+      <button class="btn" id="noteup">Higher</button>
+      <select id="key" aria-label="Note"></select>
+      <select id="scale" aria-label="Mood">
+        <option value="major">Bright (major)</option>
+        <option value="minor">Dark (minor)</option>
         <option value="chromatic">Any note</option>
       </select>
-      <button class="btn" id="findkey">Find my key</button>
-      <span class="hint grow" id="keyhint" style="margin:0"></span>
+    </div>
+    <div class="hint" id="keyhint">Play the note, then sing your song starting from it. Use Lower or Higher until it sits comfortably in your voice.</div>
+    <div class="keyrow">
+      <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="hold"> Keep the note humming while I sing <span class="hint" style="margin:0">(headphones only)</span></label>
+      <span class="grow"></span>
+      <button class="btn" id="findkey">Already sang it? Find the note for me</button>
     </div>
   </section>
 
@@ -485,13 +492,15 @@ PRESETS.forEach((p, i) => {
   $('pads').appendChild(b);
 });
 NOTES.forEach((n, i) => $('key').add(new Option(n, i)));
-try { const s = JSON.parse(localStorage.vb || '{}'); if (s.key != null) $('key').value = s.key; if (s.scale) $('scale').value = s.scale; } catch {}
+let refMidi = 48; // the starting note, C3..B3 by default
+try { const s = JSON.parse(localStorage.vb || '{}'); if (s.ref) refMidi = s.ref; if (s.scale) $('scale').value = s.scale; } catch {}
+$('key').value = refMidi % 12;
 
 function send(withVoices) {
   $('tuneOut').textContent = +$('tune').value === 0 ? 'off' : +$('tune').value === 100 ? 'hard' : $('tune').value;
   const ps = +$('pitch').value; $('pitchOut').textContent = ps === 0 ? 'normal' : Math.abs(ps) === 12 ? (ps > 0 ? 'one octave higher' : 'one octave lower') : Math.abs(ps) + (ps > 0 ? ' higher' : ' lower');
   $('verbOut').textContent = $('verb').value; $('volOut').textContent = $('vol').value;
-  try { localStorage.vb = JSON.stringify({ key: $('key').value, scale: $('scale').value }); } catch {}
+  try { localStorage.vb = JSON.stringify({ ref: refMidi, scale: $('scale').value }); } catch {}
   if (!vox) return;
   const t = ctx.currentTime;
   wet.gain.setTargetAtTime(Math.pow($('verb').value / 100, 1.5) * 0.9, t, 0.05);
@@ -506,7 +515,41 @@ function choose(p) {
 }
 $('pitch0').onclick = () => { $('pitch').value = 0; send(false); };
 ['pitch','tune','verb','vol'].forEach(id => $(id).oninput = () => send(false));
-['key','scale'].forEach(id => $(id).onchange = () => send(false));
+// ---- starting note: a reference tone to sing from; it also sets the key everything is tuned to ----
+let drone = null, ringing = [];
+const hz = m => 440 * Math.pow(2, (m - 69) / 12);
+function tone(midi, at, dur, gain) {
+  const g = ctx.createGain(), lp = ctx.createBiquadFilter(); lp.frequency.value = 1800;
+  g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(gain, at + 0.03);
+  if (dur) { g.gain.setValueAtTime(gain, at + dur * 0.6); g.gain.linearRampToValueAtTime(0, at + dur); }
+  const os = [['triangle', 1, 1], ['sine', 2, 0.3]].map(([type, mult, lvl]) => {
+    const o = ctx.createOscillator(), og = ctx.createGain(); o.type = type; o.frequency.value = hz(midi) * mult; og.gain.value = lvl;
+    o.connect(og).connect(lp); o.start(at); if (dur) o.stop(at + dur + 0.05); return o; });
+  lp.connect(g).connect(ctx.destination); // straight to the output, so it is never in a saved take
+  return { g, os };
+}
+function chordNotes() { const sc = $('scale').value; return sc === 'chromatic' ? [0, 7] : [0, sc === 'minor' ? 3 : 4, 7]; }
+function playNote() {
+  if (!ctx) return;
+  const t = ctx.currentTime + 0.03;
+  ringing.forEach(d => { d.g.gain.cancelScheduledValues(t); d.g.gain.setTargetAtTime(0, t, 0.02); d.os.forEach(o => o.stop(t + 0.2)); }); // cut off the last one
+  ringing = [tone(refMidi, t, 1.6, 0.22),                                    // the note itself
+    ...chordNotes().map(n => tone(refMidi + n, t + 1.5, 1.8, 0.1))];         // then its chord, for the feel of the song
+}
+function setDrone() {
+  if (drone) { const t = ctx.currentTime; drone.forEach(d => { d.g.gain.setTargetAtTime(0, t, 0.08); d.os.forEach(o => o.stop(t + 0.5)); }); drone = null; }
+  if (ctx && $('hold').checked) drone = [tone(refMidi, ctx.currentTime, 0, 0.05), tone(refMidi + 7, ctx.currentTime, 0, 0.02)];
+}
+function setRef(m, play) {
+  refMidi = Math.max(41, Math.min(64, m)); $('key').value = refMidi % 12;
+  send(false); setDrone(); if (play) playNote();
+}
+$('playnote').onclick = playNote;
+$('notedown').onclick = () => setRef(refMidi - 1, true);
+$('noteup').onclick = () => setRef(refMidi + 1, true);
+$('hold').onchange = setDrone;
+$('key').onchange = () => setRef(48 + +$('key').value, true);
+$('scale').onchange = () => { send(false); playNote(); };
 
 // ---- audio ----
 function makeIR(seconds) {
@@ -615,7 +658,7 @@ $('clear').onclick = () => vox.port.postMessage({ type: 'clear' });
 
 // ---- find my key: listen for 10 s, match the notes sung against major/minor profiles ----
 $('findkey').onclick = () => {
-  if (keyFind) return;
+  if (keyFind || !vox) return;
   if (mode === 'tape' && tapeLen && tapeState === 'idle') tapeCmd('play'); // listen to the recording
   keyFind = { h: Array(12).fill(0) }; let left = 10;
   const tick = () => {
@@ -627,8 +670,8 @@ $('findkey').onclick = () => {
       let a = 0, b = 0, c = 0; for (let i = 0; i < 12; i++) { const x = h[(i + k) % 12] - mh, y = p[i] - mp; a += x * y; b += x * x; c += y * y; } return a / Math.sqrt(b * c || 1); };
     let best = -2, bk = 0, bs = 'major';
     for (let k = 0; k < 12; k++) { const a = corr(maj, k), b = corr(min, k); if (a > best) { best = a; bk = k; bs = 'major'; } if (b > best) { best = b; bk = k; bs = 'minor'; } }
-    $('key').value = bk; $('scale').value = bs; send(false);
-    $('keyhint').textContent = `Set to ${NOTES[bk]} ${bs}.`;
+    $('scale').value = bs; setRef(48 + bk, false);
+    $('keyhint').textContent = `Found it: ${NOTES[bk]}, ${bs === 'major' ? 'bright' : 'dark'}. Everything is tuned to that now.`;
   };
   tick();
 };
