@@ -228,13 +228,13 @@ a.dl{color:var(--accent)}
     </div>
   </details>
 
-  <section class="panel">
+  <section class="panel" id="metroPanel" hidden>
     <div class="keyrow">
       <label style="display:flex;gap:8px;align-items:center;font-weight:600"><input type="checkbox" id="metro"> Metronome</label>
       <input type="range" id="bpm" min="50" max="200" value="90" class="grow" aria-label="Tempo">
       <output id="bpmOut" style="font:12px var(--mono);color:var(--dim);min-width:8ch;text-align:right"></output>
     </div>
-    <div class="hint" id="metroHint">With it on, you get four clicks before recording and the loop is trimmed to fit the beat.</div>
+    <div class="hint" id="metroHint">When you record: four clicks, then go. Each layer is cut to 1, 2, 4 or 8 bars so they all line up.</div>
   </section>
 
   <section class="panel" id="tapePanel" hidden>
@@ -331,7 +331,7 @@ class Vox extends AudioWorkletProcessor {
     if (m.type === 'tape') {
       if (m.cmd === 'rec') { this.tape = new Float32Array(m.max); this.tapeLen = 0; this.t0 = m.t0; this.tLoop = m.loopLen; this.off = m.off;
         this.rec = true; this.capt = true; this.armed = true; this.playing = m.loopLen > 0; }
-      else if (m.cmd === 'recstop') { this.rec = false; this.capt = false; this.report(); }
+      else if (m.cmd === 'recstop') { this.rec = false; this.capt = false; this.tape = this.tape.slice(0, this.tapeLen); this.report(); }
       else if (m.cmd === 'play') { this.t0 = m.t0; this.tLoop = m.loopLen; this.off = m.off; this.playing = true; }
       else if (m.cmd === 'off') this.off = m.off;
       else if (m.cmd === 'stop') { this.rec = false; this.capt = false; this.playing = false; }
@@ -599,7 +599,7 @@ let mode = 'live';
 // Every channel (the live voice, and each recorded layer) has its own sound settings and its own engine.
 const newSet = (o = {}) => ({ preset: PRESETS[2], pitch: 0, tune: 100, verb: 22, thick: 0, echo: 0, vol: 100, mute: false, solo: false, ...o });
 const liveS = newSet();
-let tracks = [], sel = null, recT = null, stopping = false, playing = false, loopLen = 0, t0 = 0, grid = false, rendering = false, trackN = 0;
+let tracks = [], sel = null, recT = null, stopping = false, playing = false, unit = 0, t0 = 0, grid = false, rendering = false, trackN = 0;
 const cur = () => (mode === 'tape' && sel) ? sel : liveS; // the settings the pads and sliders are editing
 
 // ---- UI build ----
@@ -762,7 +762,7 @@ function setMode(m) {
   if (mode === 'tape' && m !== 'tape' && ctx) { if (recT) stopRec(); stopAll(); }
   mode = m;
   document.querySelectorAll('#mode button').forEach(b => b.setAttribute('aria-pressed', b.dataset.m === m));
-  $('loopPanel').hidden = m !== 'live'; $('tapePanel').hidden = m !== 'tape';
+  $('loopPanel').hidden = m !== 'live'; $('tapePanel').hidden = $('metroPanel').hidden = m !== 'tape';
   $('hint').textContent = m === 'live' ? 'Pick a sound and sing.' : 'Record yourself, then switch sounds while it plays back.';
   if (vox) { vox.port.postMessage({ type: 'mode', mode: m }); loadUI(cur()); renderTracks(); metroSync(); }
 }
@@ -787,9 +787,17 @@ const beatLen = () => Math.round(ctx.sampleRate * 60 / +$('bpm').value);
 const latency = () => Math.round(+$('sync').value / 1000 * ctx.sampleRate);
 const tcmd = (T, m) => T.ch.node.port.postMessage({ type: 'tape', ...m });
 const offOf = T => T.synced ? latency() : 0;
+const longest = () => tracks.reduce((m, T) => Math.max(m, T.len || 0), 0);
+// Loop lengths are always the base length x 1, 2, 4, 8..., so short and long loops keep meeting at the same point.
+function fitLength(n) { // n = how many base lengths were recorded
+  let p = 1; while (p * 2 <= n) p *= 2;          // largest power of two that fits
+  if (n - p > 0.4) p *= 2;                        // sang well past it: give the take the next size up
+  while (p > 1 && p * unit > ctx.sampleRate * 110) p /= 2;
+  return p;
+}
 function playAll() {
   t0 = frameNow() + Math.round(0.08 * ctx.sampleRate);
-  tracks.forEach(T => tcmd(T, { cmd: 'play', t0, loopLen, off: offOf(T) }));
+  tracks.forEach(T => tcmd(T, { cmd: 'play', t0, loopLen: T.len, off: offOf(T) }));
   playing = true; metroSync();
 }
 function stopAll() { tracks.forEach(T => tcmd(T, { cmd: 'stop' })); playing = false; metroSync(); }
@@ -797,39 +805,41 @@ function record() {
   if (recT || rendering || tracks.length >= 8) return;
   const sr = ctx.sampleRate, first = !tracks.length, click = $('metro').checked && (first || grid);
   if (first) grid = click;
-  const T = newSet({ ...cur(), vol: 100, mute: false, solo: false, name: 'Layer ' + (++trackN), synced: !first || click });
+  const T = newSet({ ...cur(), len: 0, vol: 100, mute: false, solo: false, name: 'Layer ' + (++trackN), synced: !first || click });
   makeChannel(T); T.ch.node.port.postMessage({ type: 'mode', mode: 'tape' });
   src.connect(T.ch.node);
   t0 = frameNow() + Math.round(0.1 * sr) + (click ? 4 * beatLen() : 0); // four clicks first, if the metronome is on
-  tracks.forEach(x => tcmd(x, { cmd: 'play', t0, loopLen, off: offOf(x) }));
-  tcmd(T, { cmd: 'rec', t0, loopLen: first ? 0 : loopLen, off: offOf(T), max: first ? sr * 120 : loopLen + Math.round(0.6 * sr) });
+  tracks.forEach(x => tcmd(x, { cmd: 'play', t0, loopLen: x.len, off: offOf(x) })); // the other layers start from the top
+  tcmd(T, { cmd: 'rec', t0, loopLen: 0, off: offOf(T), max: sr * 120 });
   tracks.push(T); recT = T; stopping = false; playing = !first;
   apply(T); renderTracks(); metroSync(true);
 }
 function stopRec() { if (recT && !stopping) { stopping = true; tcmd(recT, { cmd: 'recstop' }); } }
 function finishRec(T, s) {
   recT = null; stopping = false; try { src.disconnect(T.ch.node); } catch {}
-  const sr = ctx.sampleRate, first = !loopLen, used = s.tlen - offOf(T);
+  const sr = ctx.sampleRate, first = !unit, used = s.tlen - offOf(T);
   if (used < 0.3 * sr) { removeTrack(T); return; } // too short to be a take
-  if (first) { // the first layer sets the loop; with the metronome on it is trimmed to whole bars
-    const bar = 4 * beatLen();
-    loopLen = grid ? Math.max(1, Math.round(used / bar)) * bar : s.tlen;
-    playAll();
-  }
-  sel = T; loadUI(T); renderTracks();
+  if (first) unit = grid ? 4 * beatLen() : s.tlen;  // base length: one bar of the metronome, or the first free take
+  T.len = first && !grid ? unit : fitLength(used / unit) * unit;
+  if (first) playAll(); else tcmd(T, { cmd: 'play', t0, loopLen: T.len, off: offOf(T) }); // joins the loop in step
+  sel = T; loadUI(T); renderTracks(); metroSync();
 }
 function removeTrack(T) {
   if (T === recT) { recT = null; stopping = false; }
   tcmd(T, { cmd: 'stop' }); const c = T.ch; setTimeout(() => { try { src.disconnect(c.node); } catch {} c.node.disconnect(); c.out.disconnect(); c.vs.disconnect(); c.es.disconnect(); }, 100);
   tracks = tracks.filter(x => x !== T); if (sel === T) sel = tracks[tracks.length - 1] || null;
-  if (!tracks.length) { loopLen = 0; grid = false; playing = false; trackN = 0; }
+  if (!tracks.length) { unit = 0; grid = false; playing = false; trackN = 0; }
   loadUI(cur()); renderTracks(); metroSync();
+}
+function lenText(T) {
+  const n = Math.round(T.len / unit);
+  return grid ? n + (n === 1 ? ' bar' : ' bars') : (T.len / ctx.sampleRate).toFixed(1) + 's';
 }
 function renderTracks() {
   const box = $('tracks'); box.innerHTML = '';
   tracks.forEach(T => {
     const row = document.createElement('div'); row.className = 'trk' + (T === sel ? ' sel' : '') + (T === recT ? ' recg' : '');
-    row.innerHTML = `<button class="tname"><b>${T.name}</b><span>${T === recT ? 'Recording…' : T.preset.name}</span></button>
+    row.innerHTML = `<button class="tname"><b>${T.name}</b><span>${T === recT ? 'Recording…' : T.preset.name + ' · ' + lenText(T)}</span></button>
       <button class="btn sm${T.solo ? ' on' : ''}" data-a="solo" title="Hear only this layer">Solo</button>
       <button class="btn sm${T.mute ? ' on' : ''}" data-a="mute" title="Silence this layer">Mute</button>
       <input type="range" min="0" max="100" value="${T.vol}" aria-label="${T.name} volume" title="Layer volume">
@@ -849,48 +859,46 @@ $('render').onclick = () => { // play the loop through once, as you hear it, and
   if (!tracks.length || recT || rendering) return;
   rendering = true; stopAll(); takeChunks = []; tap.port.postMessage(true); playAll();
   setTimeout(() => { stopAll(); setTimeout(() => { tap.port.postMessage(false);
-    setTimeout(() => { saveWav($('dl2'), 'vocal-booth-mix.wav'); rendering = false; }, 150); }, 2500); }, loopLen / ctx.sampleRate * 1000 + 80);
+    setTimeout(() => { saveWav($('dl2'), 'vocal-booth-mix.wav'); rendering = false; }, 150); }, 2500); }, longest() / ctx.sampleRate * 1000 + 80);
 };
 function tick() { // keep the transport button, ring and hints current
-  const sr = ctx.sampleRate, fr = frameNow() - t0, counting = recT && fr < 0, first = recT && !loopLen;
+  const sr = ctx.sampleRate, fr = frameNow() - t0, counting = recT && fr < 0, first = recT && !unit, loopLen = longest();
   $('tape').classList.toggle('rec', !!recT);
   $('tapeLabel').textContent = counting ? 'Get ready' : recT || playing ? 'Stop' : tracks.length ? 'Play' : 'Record';
-  const prog = loopLen && (playing || recT) && fr >= 0 ? (fr % loopLen) / loopLen : first && fr > 0 ? fr / (sr * 120) : 0;
+  const prog = recT ? Math.max(0, fr) / (sr * 120) : loopLen && playing && fr >= 0 ? (fr % loopLen) / loopLen : 0;
   $('tprog').style.strokeDashoffset = 289 * (1 - prog);
   $('addlayer').disabled = !tracks.length || !!recT || rendering || tracks.length >= 8;
   $('render').disabled = !tracks.length || !!recT || rendering; $('render').textContent = rendering ? 'Saving…' : 'Save the mix';
   $('tapeHint').textContent = counting ? 'Four clicks, then sing.'
     : first ? `Recording… ${Math.max(0, fr / sr).toFixed(0)}s. Press Space to stop.`
-    : recT ? 'Recording a layer over the loop. It stops by itself at the end, or press Space.'
-    : tracks.length ? `${(loopLen / sr).toFixed(1)}s loop. Tap a layer to select it; the sounds and sliders above change that layer only.`
+    : recT ? `Recording a layer… ${Math.max(0, fr / sr).toFixed(0)}s. Sing as long as you like, then press Space.`
+    : tracks.length ? 'Tap a layer to select it; the sounds and sliders above change that layer only.'
     : "Press Space and sing. You won't hear yourself while recording.";
-  const locked = !!loopLen && mode === 'tape';
+  const locked = !!unit && mode === 'tape';
   $('bpm').disabled = locked && grid; $('metro').disabled = locked && !grid;
-  $('metroHint').textContent = !locked ? 'With it on, you get four clicks before recording and the loop is trimmed to fit the beat.'
+  $('metroHint').textContent = !locked ? 'When you record: four clicks, then go. Each layer is cut to 1, 2, 4 or 8 bars so they all line up.'
     : grid ? 'Tempo is locked while you have layers.' : 'These layers were recorded without the metronome. Delete them to use it.';
 }
 
 // ---- metronome: clicks go straight to your ears and are never saved ----
-let mBase = null, mK = 0, mFree = false;
+// (it never runs on its own)
+let mBase = null, mK = 0;
 function click(at, accent) {
   const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.value = accent ? 1760 : 1175;
   g.gain.setValueAtTime(0.3, at); g.gain.exponentialRampToValueAtTime(0.001, at + 0.05);
   o.connect(g).connect(ctx.destination); o.start(at); o.stop(at + 0.06);
 }
-function metroSync(countIn) {
+function metroSync(countIn) { // clicks only around recording: four to count you in, then through the take
   if (!ctx) return;
-  const on = $('metro').checked, transport = mode === 'tape' && (recT || playing), free = on && !transport && (mode === 'live' || !tracks.length);
-  if (on && transport && grid) { mBase = t0; mK = countIn ? -4 : Math.ceil((frameNow() - t0) / beatLen()); mFree = false; }
-  else if (free) { if (!mFree) { mBase = frameNow() + Math.round(0.1 * ctx.sampleRate); mK = 0; mFree = true; } }
-  else { mBase = null; mFree = false; }
+  if (recT && grid) { mBase = t0; mK = countIn ? -4 : Math.max(mK, Math.ceil((frameNow() - t0) / beatLen())); }
+  else mBase = null;
 }
 setInterval(() => {
   if (mBase == null) return;
   const sr = ctx.sampleRate, b = beatLen(), now = frameNow();
   while (mBase + mK * b < now + 0.15 * sr) { const at = mBase + mK * b; if (at >= now) click(at / sr, ((mK % 4) + 4) % 4 === 0); mK++; }
 }, 40);
-$('metro').onchange = () => metroSync();
-$('bpm').oninput = () => { send(); if (mFree) { mFree = false; metroSync(); } };
+$('bpm').oninput = () => send();
 
 // ---- status from the engines ----
 let loopState = 'empty';
