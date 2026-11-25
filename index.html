@@ -233,8 +233,9 @@ a.dl{color:var(--accent)}
       <label style="display:flex;gap:8px;align-items:center;font-weight:600"><input type="checkbox" id="metro"> Metronome</label>
       <input type="range" id="bpm" min="50" max="200" value="90" class="grow" aria-label="Tempo">
       <output id="bpmOut" style="font:12px var(--mono);color:var(--dim);min-width:8ch;text-align:right"></output>
+      <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="msound" checked> Hear the click</label>
     </div>
-    <div class="hint" id="metroHint">When you record: four clicks, then go. Each layer is cut to 1, 2, 4 or 8 bars so they all line up.</div>
+    <div class="hint" id="metroHint">When you record: four clicks, then go. Each layer is cut to 1, 2, 4 or 8 bars so they all line up. Untick Hear the click to record in silence; the cut still happens.</div>
   </section>
 
   <section class="panel" id="tapePanel" hidden>
@@ -803,8 +804,9 @@ function playAll() {
 function stopAll() { tracks.forEach(T => tcmd(T, { cmd: 'stop' })); playing = false; metroSync(); }
 function record() {
   if (recT || rendering || tracks.length >= 8) return;
-  const sr = ctx.sampleRate, first = !tracks.length, click = $('metro').checked && (first || grid);
-  if (first) grid = click;
+  const sr = ctx.sampleRate, first = !tracks.length;
+  if (first) grid = $('metro').checked;
+  const click = grid && $('msound').checked; // silent takes are still cut to the beat
   const T = newSet({ ...cur(), len: 0, vol: 100, mute: false, solo: false, name: 'Layer ' + (++trackN), synced: !first || click });
   makeChannel(T); T.ch.node.port.postMessage({ type: 'mode', mode: 'tape' });
   src.connect(T.ch.node);
@@ -875,9 +877,9 @@ function tick() { // keep the transport button, ring and hints current
     : tracks.length ? 'Tap a layer to select it; the sounds and sliders above change that layer only.'
     : "Press Space and sing. You won't hear yourself while recording.";
   const locked = !!unit && mode === 'tape';
-  $('bpm').disabled = locked && grid; $('metro').disabled = locked && !grid;
-  $('metroHint').textContent = !locked ? 'When you record: four clicks, then go. Each layer is cut to 1, 2, 4 or 8 bars so they all line up.'
-    : grid ? 'Tempo is locked while you have layers.' : 'These layers were recorded without the metronome. Delete them to use it.';
+  $('bpm').disabled = locked && grid; $('metro').disabled = locked; $('msound').disabled = !$('metro').checked || (locked && !grid);
+  $('metroHint').textContent = !locked ? 'When you record: four clicks, then go. Each layer is cut to 1, 2, 4 or 8 bars so they all line up. Untick Hear the click to record in silence; the cut still happens.'
+    : grid ? 'Tempo is locked while you have layers. Untick Hear the click to record a layer in silence; it is still cut to fit.' : 'These layers were recorded without the metronome. Delete them to use it.';
 }
 
 // ---- metronome: clicks go straight to your ears and are never saved ----
@@ -890,7 +892,7 @@ function click(at, accent) {
 }
 function metroSync(countIn) { // clicks only around recording: four to count you in, then through the take
   if (!ctx) return;
-  if (recT && grid) { mBase = t0; mK = countIn ? -4 : Math.max(mK, Math.ceil((frameNow() - t0) / beatLen())); }
+  if (recT && grid && $('msound').checked) { mBase = t0; mK = countIn ? -4 : Math.max(mK, Math.ceil((frameNow() - t0) / beatLen())); }
   else mBase = null;
 }
 setInterval(() => {
@@ -899,6 +901,7 @@ setInterval(() => {
   while (mBase + mK * b < now + 0.15 * sr) { const at = mBase + mK * b; if (at >= now) click(at / sr, ((mK % 4) + 4) % 4 === 0); mK++; }
 }, 40);
 $('bpm').oninput = () => send();
+$('msound').onchange = () => metroSync();
 
 // ---- status from the engines ----
 let loopState = 'empty';
